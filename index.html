@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="es">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <link rel="stylesheet" href="/src/styles.css" />
+    <title>Editor Angular</title>
+    <script type="module" src="/src/main.ts" defer></script>
+  </head>
+  <body>
+    <div id="app">
+      <aside id="sidebar">
+        <div class="sidebar-header">
+          <span id="project-name">Sin proyecto</span>
+          <button id="open-folder" title="Abrir carpeta (Ctrl+O)">Abrir</button>
+        </div>
+        <div id="tree" role="tree"></div>
+      </aside>
+      <main id="main">
+        <div id="tabs" role="tablist"></div>
+        <div id="editor"></div>
+        <div id="welcome">
+          <h1>Editor Angular</h1>
+          <p><kbd>Ctrl</kbd>+<kbd>O</kbd> abrir carpeta</p>
+          <p><kbd>Ctrl</kbd>+<kbd>P</kbd> ir a archivo</p>
+          <p><kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>F</kbd> buscar en proyecto</p>
+          <p><kbd>Alt</kbd>+<kbd>O</kbd> alternar .ts / .html / .scss</p>
+          <p><kbd>F12</kbd> / <kbd>Ctrl</kbd>+clic ir a definición · <kbd>Shift</kbd>+<kbd>F12</kbd> referencias</p>
+          <p><kbd>F2</kbd> renombrar · <kbd>Shift</kbd>+<kbd>Alt</kbd>+<kbd>F</kbd> formatear · <kbd>Ctrl</kbd>+<kbd>Espacio</kbd> autocompletar</p>
+          <p><kbd>Ctrl</kbd>+<kbd>S</kbd> guardar · <kbd>Ctrl</kbd>+<kbd>W</kbd> cerrar pestaña</p>
+        </div>
+      </main>
+    </div>
+    <footer id="status">
+      <span id="status-msg"></span>
+      <span id="status-pos"></span>
+      <span id="status-lang"></span>
+    </footer>
+
+    <div id="palette" class="overlay" hidden>
+      <div class="overlay-box">
+        <input id="palette-input" placeholder="Buscar archivo por nombre…" spellcheck="false" />
+        <ul id="palette-list" role="listbox"></ul>
+      </div>
+    </div>
+
+    <div id="search" class="overlay" hidden>
+      <div class="overlay-box wide">
+        <div class="search-row">
+          <input id="search-input" placeholder="Buscar en el proyecto…" spellcheck="false" />
+          <label title="Distinguir mayúsculas"><input type="checkbox" id="search-case" /> Aa</label>
+        </div>
+        <div id="search-summary"></div>
+        <ul id="search-list" role="listbox"></ul>
+      </div>
+    </div>
+  </body>
+</html>
