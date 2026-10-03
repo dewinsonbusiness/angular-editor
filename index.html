@@ -27,12 +27,29 @@
           <p><kbd>Alt</kbd>+<kbd>O</kbd> alternar .ts / .html / .scss</p>
           <p><kbd>F12</kbd> / <kbd>Ctrl</kbd>+clic ir a definición · <kbd>Shift</kbd>+<kbd>F12</kbd> referencias</p>
           <p><kbd>F2</kbd> renombrar · <kbd>Shift</kbd>+<kbd>Alt</kbd>+<kbd>F</kbd> formatear · <kbd>Ctrl</kbd>+<kbd>Espacio</kbd> autocompletar</p>
-          <p><kbd>Ctrl</kbd>+<kbd>S</kbd> guardar · <kbd>Ctrl</kbd>+<kbd>W</kbd> cerrar pestaña</p>
+          <p><kbd>Ctrl</kbd>+<kbd>S</kbd> guardar · <kbd>Ctrl</kbd>+<kbd>W</kbd> cerrar pestaña · <kbd>Ctrl</kbd>+<kbd>J</kbd> panel de serve</p>
         </div>
+        <section id="panel" hidden>
+          <div id="panel-resizer"></div>
+          <div class="panel-header">
+            <span class="panel-title">Serve</span>
+            <select id="serve-project" title="App a servir"></select>
+            <input id="serve-port" placeholder="puerto" title="Puerto (vacío = el de la configuración)" inputmode="numeric" />
+            <button id="serve-start" title="Iniciar">▶ Iniciar</button>
+            <div id="serve-sessions"></div>
+            <span id="serve-url"></span>
+            <button id="serve-open" title="Abrir en el navegador">Abrir ↗</button>
+            <button id="serve-stop" title="Detener">■ Detener</button>
+            <button id="serve-clear" class="icon" title="Limpiar salida">⌫</button>
+            <button id="panel-close" class="icon" title="Cerrar panel (Ctrl+J)">×</button>
+          </div>
+          <div id="serve-output"></div>
+        </section>
       </main>
     </div>
     <footer id="status">
       <span id="status-msg"></span>
+      <span id="status-serve" title="Panel de serve (Ctrl+J)"></span>
       <span id="status-pos"></span>
       <span id="status-lang"></span>
     </footer>

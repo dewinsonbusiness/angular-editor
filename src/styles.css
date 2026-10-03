@@ -296,3 +296,78 @@ kbd {
 .tab.conflict .tab-name { color: #d19a66; font-style: italic; }
 .menu-item.has-submenu kbd { font-size: 10px; }
 #tree .node.editing input::placeholder { color: var(--fg-dim); font-style: italic; }
+
+/* ---------- panel de serve ---------- */
+
+#panel {
+  position: relative;
+  height: 240px;
+  min-height: 80px;
+  display: flex;
+  flex-direction: column;
+  border-top: 1px solid var(--border);
+  background: var(--bg-side);
+}
+#panel-resizer { position: absolute; top: -3px; left: 0; right: 0; height: 6px; cursor: ns-resize; z-index: 2; }
+.panel-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 8px;
+  border-bottom: 1px solid var(--border);
+  flex-wrap: wrap;
+}
+.panel-title { font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: .04em; margin-right: 4px; }
+.panel-header select, .panel-header input {
+  background: var(--bg);
+  color: var(--fg-bright);
+  border: 1px solid var(--bg-active);
+  border-radius: 3px;
+  font: 12px var(--font-ui);
+  padding: 2px 4px;
+}
+.panel-header input { width: 64px; }
+.panel-header button { font-size: 12px; padding: 2px 8px; }
+.panel-header button.icon { background: none; color: var(--fg-dim); font-size: 14px; padding: 0 6px; }
+.panel-header button.icon:hover { color: var(--fg-bright); background: var(--bg-active); }
+.panel-header button:disabled { opacity: .4; cursor: default; background: var(--bg-active); }
+#serve-sessions { display: flex; gap: 4px; flex: 1; min-width: 0; overflow-x: auto; }
+#serve-url { color: var(--fg-dim); font: 12px var(--font-code); }
+
+.serve-chip {
+  background: var(--bg);
+  border: 1px solid var(--bg-active);
+  color: var(--fg);
+  font-size: 12px;
+  padding: 1px 8px 1px 6px;
+  white-space: nowrap;
+}
+.serve-chip::before { content: "●"; margin-right: 5px; color: var(--fg-dim); }
+.serve-chip.selected { border-color: #528bff; color: var(--fg-bright); }
+.serve-chip.starting::before, .serve-chip.building::before { color: #61afef; }
+.serve-chip.ready::before { color: #98c379; }
+.serve-chip.error::before { color: #e06c75; }
+
+#serve-output {
+  flex: 1;
+  overflow: auto;
+  padding: 4px 10px;
+  font: 12px/1.45 var(--font-code);
+  white-space: pre-wrap;
+  word-break: break-word;
+  user-select: text;
+  background: var(--bg);
+}
+.serve-log .cmd { color: var(--fg-dim); font-style: italic; }
+.serve-log .error { color: #e06c75; }
+.serve-log .stderr { color: #d19a66; }
+.serve-log .warning { color: #e5c07b; }
+.serve-log .ok { color: #98c379; }
+.serve-log .loc { color: #61afef; text-decoration: underline; cursor: pointer; }
+.serve-log .loc:hover { color: #8cc4ff; }
+
+#status-serve { cursor: pointer; padding: 0 6px; border-radius: 3px; }
+#status-serve:hover { background: var(--bg-active); color: var(--fg-bright); }
+#status-serve.starting, #status-serve.building { color: #61afef; }
+#status-serve.ready { color: #98c379; }
+#status-serve.error { color: #e06c75; }

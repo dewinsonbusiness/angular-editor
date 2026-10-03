@@ -8,6 +8,7 @@ import { basicSetup } from "codemirror";
 import { oneDark } from "@codemirror/theme-one-dark";
 import { langFor } from "./lang";
 import { LspManager, samePath, type Location } from "./lsp";
+import { ServePanel } from "./serve";
 
 interface Entry { name: string; path: string; is_dir: boolean }
 interface Hit { path: string; line: number; col: number; text: string }
@@ -827,6 +828,7 @@ async function openFolder(path: string) {
   });
   await renderDir($("tree"), root, 0);
   watchRoot(root);
+  servePanel.loadTargets(root);
   updateTitle();
   refreshIndex().then(() => status(`${fileIndex.length} archivos indexados`));
 }
@@ -1050,6 +1052,7 @@ window.addEventListener("keydown", (e) => {
   }
   else if (e.altKey && !ctrl && k === "o") cycleCompanion();
   else if (k === "f12" && !e.shiftKey && !ctrl && active) goToDefinition();
+  else if (ctrl && !e.shiftKey && k === "j") servePanel.toggle();
   else handled = false;
   if (handled) { e.preventDefault(); e.stopPropagation(); }
 }, { capture: true });
@@ -1069,6 +1072,11 @@ appWindow.onCloseRequested(async (e) => {
 window.addEventListener("beforeunload", () => lspServers.stop());
 
 // ---------- arranque ----------
+
+const servePanel = new ServePanel({
+  openFile: (path, line, col) => openFile(path, line, col),
+  status,
+});
 
 showWelcome(true);
 let lastRoot: string | null = null;

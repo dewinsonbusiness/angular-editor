@@ -68,7 +68,7 @@ pub struct GenerateResult {
     output: String,
 }
 
-enum Workspace {
+pub(crate) enum Workspace {
     Nx { root: PathBuf, bin: PathBuf },
     Ng { root: PathBuf, bin: PathBuf },
 }
@@ -112,7 +112,7 @@ fn not_installed(root: &Path, what: &str) -> String {
 
 /// Busca hacia arriba desde `cwd`. Nx tiene prioridad: un `nx.json`, o un `project.json`
 /// dentro de un repo con `nx` instalado. Si no, el `angular.json` más cercano.
-fn detect_workspace(cwd: &Path) -> Result<Workspace, String> {
+pub(crate) fn detect_workspace(cwd: &Path) -> Result<Workspace, String> {
     let mut saw_project_json = false;
     let mut angular_root: Option<PathBuf> = None;
     for dir in cwd.ancestors() {

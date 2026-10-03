@@ -1,5 +1,6 @@
 mod fsops;
 mod lsp;
+mod serve;
 
 use ignore::WalkBuilder;
 use serde::Serialize;
@@ -131,6 +132,7 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .manage(lsp::Servers::default())
         .manage(fsops::Watcher::default())
+        .manage(serve::Serves::default())
         .invoke_handler(tauri::generate_handler![
             list_dir,
             read_file,
@@ -146,7 +148,13 @@ pub fn run() {
             fsops::delete_path,
             fsops::reveal_in_explorer,
             fsops::ng_generate,
-            fsops::watch_root
+            fsops::watch_root,
+            serve::serve_targets,
+            serve::serve_targets_nx,
+            serve::serve_start,
+            serve::serve_stop,
+            serve::serve_stop_all,
+            serve::open_url
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
@@ -154,6 +162,7 @@ pub fn run() {
             // En Windows los procesos hijos no mueren con el padre: hay que matarlos.
             if let tauri::RunEvent::Exit = event {
                 app.state::<lsp::Servers>().kill_all();
+                app.state::<serve::Serves>().stop_all();
             }
         });
 }
