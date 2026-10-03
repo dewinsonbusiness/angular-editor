@@ -277,6 +277,17 @@ export class LspManager {
     this.applyDiagnostics();
   }
 
+  /** Avisar a los servidores de archivos creados (1), modificados (2) o borrados (3) fuera del editor. */
+  notifyWatchedFiles(changes: { path: string; type: 1 | 2 | 3 }[]) {
+    const relevant = changes.filter((c) => /\.(ts|mts|cts|js|mjs|html|json)$/i.test(c.path) || c.type === 3);
+    if (!relevant.length) return;
+    for (const s of this.servers.values()) {
+      s.client.notification<lsp.DidChangeWatchedFilesParams>("workspace/didChangeWatchedFiles", {
+        changes: relevant.map((c) => ({ uri: pathToUri(c.path), type: c.type })),
+      });
+    }
+  }
+
   // ---------- diagnósticos ----------
 
   private onDiagnostics(client: LSPClient, params: lsp.PublishDiagnosticsParams): boolean {

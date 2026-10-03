@@ -1,7 +1,7 @@
-import { invoke } from "@tauri-apps/api/core";
+import { invoke, Channel } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { open, ask } from "@tauri-apps/plugin-dialog";
-import { EditorState, Text } from "@codemirror/state";
+import { EditorState, Text, Transaction } from "@codemirror/state";
 import { EditorView, keymap } from "@codemirror/view";
 import { indentWithTab } from "@codemirror/commands";
 import { basicSetup } from "codemirror";
@@ -21,8 +21,17 @@ let root: string | null = null;
 let sep = "\\";
 let fileIndex: string[] = [];
 // Nodos del árbol ya renderizados, por ruta en minúsculas (Windows no distingue mayúsculas).
+interface DirNode {
+  row: HTMLElement | null; // null = raíz del proyecto
+  children: HTMLElement;
+  childDepth: number;
+  setOpen(open: boolean): Promise<void>;
+  reload(): Promise<void>; // relee del disco si ya estaba cargada
+}
 const fileNodes = new Map<string, HTMLElement>();
-const dirNodes = new Map<string, (open: boolean) => Promise<void>>();
+const dirNodes = new Map<string, DirNode>();
+const expandedDirs = new Set<string>();
+const problems = new Map<string, string>(); // ruta → clase has-errors / has-warnings
 const tabs: Tab[] = [];
 let active: Tab | null = null;
 
@@ -61,6 +70,7 @@ const lspServers = new LspManager({
       t.el.classList.remove("has-errors", "has-warnings");
       if (cls) t.el.classList.add(cls);
     }
+    if (cls) problems.set(path.toLowerCase(), cls); else problems.delete(path.toLowerCase());
     const node = fileNodes.get(path.toLowerCase());
     node?.classList.remove("has-errors", "has-warnings");
     if (cls) node?.classList.add(cls);
@@ -191,6 +201,7 @@ async function save() {
     // sliceDoc usa el separador de línea del estado (preserva CRLF).
     await invoke("write_file", { path: tab.path, contents: view.state.sliceDoc() });
     tab.saved = doc;
+    tab.el.classList.remove("deleted", "conflict");
     refreshDirty();
     status(`Guardado ${baseName(tab.path)}`);
   } catch (e) {
@@ -198,8 +209,8 @@ async function save() {
   }
 }
 
-async function closeTab(tab: Tab) {
-  if (isDirty(tab)) {
+async function closeTab(tab: Tab, force = false) {
+  if (!force && isDirty(tab)) {
     const discard = await ask(`${baseName(tab.path)} tiene cambios sin guardar. ¿Cerrar de todos modos?`, {
       title: "Cambios sin guardar", kind: "warning", okLabel: "Descartar", cancelLabel: "Cancelar",
     });
@@ -225,6 +236,10 @@ async function closeTab(tab: Tab) {
 
 // ---------- árbol de archivos ----------
 
+const parentOf = (p: string) => p.slice(0, p.lastIndexOf(sep));
+const indent = (depth: number) => `${8 + depth * 12}px`;
+
+/** Lista `path` en `container`. Las subcarpetas que estaban abiertas se vuelven a abrir. */
 async function renderDir(container: HTMLElement, path: string, depth: number) {
   let entries: Entry[];
   try {
@@ -233,12 +248,21 @@ async function renderDir(container: HTMLElement, path: string, depth: number) {
     status(`No se pudo leer ${path}: ${e}`);
     return;
   }
+  // Olvidar los nodos descendientes anteriores; se recrean abajo.
+  const prefix = path.toLowerCase() + sep;
+  for (const m of [fileNodes, dirNodes] as Map<string, unknown>[]) {
+    for (const k of [...m.keys()]) if (k.startsWith(prefix)) m.delete(k);
+  }
+
   const frag = document.createDocumentFragment();
+  const reopen: DirNode[] = [];
   for (const e of entries) {
+    const key = e.path.toLowerCase();
     const row = document.createElement("div");
     row.className = "node " + (e.is_dir ? "dir" : "file");
-    row.style.paddingLeft = `${8 + depth * 12}px`;
+    row.style.paddingLeft = indent(depth);
     row.dataset.path = e.path;
+    row.dataset.dir = e.is_dir ? "1" : "";
     row.textContent = e.name;
     row.setAttribute("role", "treeitem");
     frag.appendChild(row);
@@ -248,19 +272,46 @@ async function renderDir(container: HTMLElement, path: string, depth: number) {
       children.hidden = true;
       frag.appendChild(children);
       let loading: Promise<void> | null = null;
-      const setOpen = async (open: boolean) => {
-        children.hidden = !open;
-        row.classList.toggle("open", open);
-        if (open) await (loading ??= renderDir(children, e.path, depth + 1));
+      const node: DirNode = {
+        row, children, childDepth: depth + 1,
+        setOpen: async (open) => {
+          children.hidden = !open;
+          row.classList.toggle("open", open);
+          if (open) expandedDirs.add(key); else expandedDirs.delete(key);
+          if (open) await (loading ??= renderDir(children, e.path, depth + 1));
+        },
+        reload: async () => { if (loading) await (loading = renderDir(children, e.path, depth + 1)); },
       };
-      dirNodes.set(e.path.toLowerCase(), setOpen);
-      row.addEventListener("click", () => setOpen(!row.classList.contains("open")));
+      dirNodes.set(key, node);
+      if (expandedDirs.has(key)) reopen.push(node);
     } else {
-      fileNodes.set(e.path.toLowerCase(), row);
-      row.addEventListener("click", () => openFile(e.path));
+      fileNodes.set(key, row);
+      const cls = problems.get(key);
+      if (cls) row.classList.add(cls);
+      if (active && samePath(active.path, e.path)) row.classList.add("active");
     }
   }
   container.replaceChildren(frag);
+  await Promise.all(reopen.map((n) => n.setOpen(true)));
+}
+
+// Un solo listener para todo el árbol (los nodos se recrean al recargar).
+$("tree").addEventListener("click", (ev) => {
+  const row = (ev.target as HTMLElement).closest<HTMLElement>(".node[data-path]");
+  if (!row) return;
+  selectTreeRow(row);
+  const path = row.dataset.path!;
+  if (row.dataset.dir) {
+    const node = dirNodes.get(path.toLowerCase());
+    node?.setOpen(!row.classList.contains("open"));
+  } else {
+    openFile(path);
+  }
+});
+
+function selectTreeRow(row: HTMLElement | null) {
+  document.querySelector("#tree .node.selected")?.classList.remove("selected");
+  row?.classList.add("selected");
 }
 
 function markTreeActive(path: string | null) {
@@ -277,13 +328,323 @@ async function revealInTree(path: string) {
     let dir = root!;
     for (const part of parts.slice(0, -1)) {
       dir += sep + part;
-      const setOpen = dirNodes.get(dir.toLowerCase());
-      if (!setOpen) break;
-      await setOpen(true);
+      const node = dirNodes.get(dir.toLowerCase());
+      if (!node) break;
+      await node.setOpen(true);
     }
   }
   if (active?.path !== path) return; // el usuario ya cambió de pestaña
-  markTreeActive(path)?.scrollIntoView({ block: "nearest" });
+  const row = markTreeActive(path);
+  selectTreeRow(row ?? null);
+  row?.scrollIntoView({ block: "nearest" });
+}
+
+// ---------- menú contextual y operaciones de archivos ----------
+
+interface MenuItem { label: string; hint?: string; danger?: boolean; action: () => void }
+
+function showMenu(x: number, y: number, items: (MenuItem | "-")[]) {
+  closeMenu();
+  const menu = document.createElement("div");
+  menu.id = "ctxmenu";
+  menu.setAttribute("role", "menu");
+  for (const it of items) {
+    if (it === "-") { menu.appendChild(document.createElement("hr")); continue; }
+    const el = document.createElement("div");
+    el.className = "menu-item" + (it.danger ? " danger" : "");
+    el.setAttribute("role", "menuitem");
+    el.innerHTML = `<span></span><kbd></kbd>`;
+    el.firstElementChild!.textContent = it.label;
+    el.lastElementChild!.textContent = it.hint ?? "";
+    el.addEventListener("mousedown", (e) => e.preventDefault());
+    el.addEventListener("click", () => { closeMenu(); it.action(); });
+    menu.appendChild(el);
+  }
+  document.body.appendChild(menu);
+  // Mantenerlo dentro de la ventana.
+  const r = menu.getBoundingClientRect();
+  menu.style.left = `${Math.min(x, innerWidth - r.width - 4)}px`;
+  menu.style.top = `${Math.min(y, innerHeight - r.height - 4)}px`;
+}
+
+function closeMenu() {
+  document.getElementById("ctxmenu")?.remove();
+}
+
+window.addEventListener("mousedown", (e) => {
+  if (!(e.target as HTMLElement).closest("#ctxmenu")) closeMenu();
+});
+window.addEventListener("blur", closeMenu);
+
+$("tree").addEventListener("contextmenu", (ev) => {
+  ev.preventDefault();
+  if (!root) return;
+  const row = (ev.target as HTMLElement).closest<HTMLElement>(".node[data-path]");
+  selectTreeRow(row);
+  const path = row?.dataset.path ?? root;
+  const isDir = !row || !!row.dataset.dir;
+  const isRoot = !row;
+  const items: (MenuItem | "-")[] = [];
+  if (isDir) {
+    items.push(
+      { label: "Nuevo archivo…", action: () => createEntry(path, "file") },
+      { label: "Nueva carpeta…", action: () => createEntry(path, "dir") },
+    );
+  } else {
+    items.push({ label: "Abrir", action: () => openFile(path) });
+  }
+  if (!isRoot) {
+    items.push(
+      "-",
+      { label: "Renombrar…", hint: "F2", action: () => renameEntry(path, isDir) },
+      { label: "Eliminar", hint: "Supr", danger: true, action: () => deleteEntry(path, isDir) },
+    );
+  }
+  items.push(
+    "-",
+    { label: "Copiar ruta", action: () => copyText(path) },
+    { label: "Copiar ruta relativa", action: () => copyText(isRoot ? "." : relOf(path)) },
+    { label: "Mostrar en el Explorador", action: () => invoke("reveal_in_explorer", { path }) },
+  );
+  showMenu(ev.clientX, ev.clientY, items);
+});
+
+// F2 / Supr sobre el elemento seleccionado del árbol.
+$("tree").addEventListener("keydown", (ev) => {
+  const row = document.querySelector<HTMLElement>("#tree .node.selected");
+  if (!row || (ev.target as HTMLElement).tagName === "INPUT") return;
+  if (ev.key === "F2") { ev.preventDefault(); renameEntry(row.dataset.path!, !!row.dataset.dir); }
+  else if (ev.key === "Delete") { ev.preventDefault(); deleteEntry(row.dataset.path!, !!row.dataset.dir); }
+});
+
+function copyText(text: string) {
+  navigator.clipboard.writeText(text).then(
+    () => status(`Copiado: ${text}`),
+    () => status("No se pudo copiar al portapapeles"),
+  );
+}
+
+const INVALID_NAME = /[<>:"|?*\\/]|^\.{1,2}$|^\s|\s$/;
+
+/** Campo de texto dentro del árbol (como en VS Code). Resuelve con el nombre o null si se cancela. */
+function inlineInput(container: HTMLElement, before: Node | null, depth: number, initial = "", selectEnd?: number) {
+  return new Promise<string | null>((resolve) => {
+    const wrap = document.createElement("div");
+    wrap.className = "node editing";
+    wrap.style.paddingLeft = indent(depth);
+    const input = document.createElement("input");
+    input.value = initial;
+    input.spellcheck = false;
+    wrap.appendChild(input);
+    container.insertBefore(wrap, before);
+    input.focus();
+    input.setSelectionRange(0, selectEnd ?? initial.length);
+    let done = false;
+    const finish = (value: string | null) => {
+      if (done) return;
+      done = true;
+      wrap.remove();
+      resolve(value);
+    };
+    input.addEventListener("input", () => {
+      input.classList.toggle("invalid", INVALID_NAME.test(input.value));
+    });
+    const commit = (keepOpenIfInvalid: boolean) => {
+      const v = input.value.trim();
+      if (!v || v === initial) return finish(null);
+      if (INVALID_NAME.test(v)) {
+        status(`Nombre no válido: ${v}`);
+        return keepOpenIfInvalid ? undefined : finish(null);
+      }
+      finish(v);
+    };
+    input.addEventListener("keydown", (e) => {
+      e.stopPropagation();
+      if (e.key === "Escape") finish(null);
+      else if (e.key === "Enter") commit(true);
+    });
+    // Como en VS Code: hacer clic fuera acepta el nombre.
+    input.addEventListener("blur", () => commit(false));
+  });
+}
+
+async function createEntry(dirPath: string, kind: "file" | "dir") {
+  const node = dirNodes.get(dirPath.toLowerCase());
+  if (!node) return;
+  await node.setOpen(true);
+  const name = await inlineInput(node.children, node.children.firstChild, node.childDepth);
+  if (!name) return;
+  const path = dirPath + sep + name;
+  try {
+    await invoke(kind === "file" ? "create_file" : "create_dir", { path });
+  } catch (e) {
+    return status(`No se pudo crear ${name}: ${e}`);
+  }
+  await node.reload();
+  if (kind === "file") {
+    fileIndex.push(relOf(path));
+    openFile(path);
+  } else {
+    dirNodes.get(path.toLowerCase())?.setOpen(true);
+  }
+}
+
+async function renameEntry(path: string, isDir: boolean) {
+  const row = (isDir ? dirNodes.get(path.toLowerCase())?.row : fileNodes.get(path.toLowerCase())) ?? null;
+  if (!row) return;
+  const name = baseName(path);
+  const dot = name.lastIndexOf(".");
+  row.hidden = true;
+  const depth = (parseInt(row.style.paddingLeft) - 8) / 12;
+  const newName = await inlineInput(row.parentElement!, row.nextSibling, depth, name, !isDir && dot > 0 ? dot : undefined);
+  row.hidden = false;
+  if (!newName) return;
+  const newPath = parentOf(path) + sep + newName;
+  try {
+    await invoke("rename_path", { from: path, to: newPath });
+  } catch (e) {
+    return status(`No se pudo renombrar: ${e}`);
+  }
+  // Mover las pestañas afectadas (el archivo o todo lo que hay dentro de la carpeta).
+  for (const t of [...tabs]) {
+    if (samePath(t.path, path)) retargetTab(t, newPath);
+    else if (isDir && t.path.toLowerCase().startsWith(path.toLowerCase() + sep)) {
+      retargetTab(t, newPath + t.path.slice(path.length));
+    }
+  }
+  if (isDir && expandedDirs.delete(path.toLowerCase())) expandedDirs.add(newPath.toLowerCase());
+  await dirNodes.get(parentOf(path).toLowerCase())?.reload();
+  if (active) revealInTree(active.path);
+  status(`Renombrado a ${newName}`);
+}
+
+/** Cambia la ruta de una pestaña abierta conservando su contenido (y si tiene cambios sin guardar). */
+function retargetTab(tab: Tab, newPath: string) {
+  const current = stateOf(tab);
+  const wasDirty = isDirty(tab);
+  lspServers.release(tab.path);
+  tab.path = newPath;
+  const state = makeState(newPath, current.sliceDoc());
+  tab.state = state;
+  if (!wasDirty) tab.saved = state.doc;
+  tab.el.title = newPath;
+  tab.el.querySelector(".tab-name")!.textContent = baseName(newPath);
+  if (tab === active) {
+    view.setState(state);
+    lspServers.afterActivate();
+    $("status-lang").textContent = langFor(newPath).name;
+  }
+  refreshDirty();
+}
+
+async function deleteEntry(path: string, isDir: boolean) {
+  const name = baseName(path);
+  const ok = await ask(
+    isDir ? `¿Mover la carpeta «${name}» y todo su contenido a la papelera?` : `¿Mover «${name}» a la papelera?`,
+    { title: "Eliminar", kind: "warning", okLabel: "Mover a la papelera", cancelLabel: "Cancelar" },
+  );
+  if (!ok) return;
+  try {
+    await invoke("delete_path", { path });
+  } catch (e) {
+    return status(`No se pudo eliminar ${name}: ${e}`);
+  }
+  for (const t of [...tabs]) {
+    if (samePath(t.path, path) || (isDir && t.path.toLowerCase().startsWith(path.toLowerCase() + sep))) {
+      await closeTab(t, true);
+    }
+  }
+  await dirNodes.get(parentOf(path).toLowerCase())?.reload();
+  status(`${name} se movió a la papelera`);
+}
+
+// ---------- cambios hechos fuera del editor ----------
+
+interface FsChange { path: string; exists: boolean; is_dir: boolean }
+
+function watchRoot(dir: string) {
+  const channel = new Channel<FsChange[]>();
+  channel.onmessage = (changes) => { if (root === dir) onFsChanges(changes); };
+  invoke("watch_root", { root: dir, onChange: channel }).catch((e) => status(`No se pueden vigilar cambios: ${e}`));
+}
+
+async function onFsChanges(changes: FsChange[]) {
+  const dirsToReload = new Map<string, string>();
+  const forServers: { path: string; type: 1 | 2 | 3 }[] = [];
+  const indexed = new Set(fileIndex.map((f) => f.toLowerCase()));
+
+  for (const c of changes) {
+    if (!inRoot(c.path)) continue;
+    const parent = parentOf(c.path);
+    dirsToReload.set(parent.toLowerCase(), parent);
+    const rel = relOf(c.path);
+    const relKey = rel.toLowerCase();
+    const wasDir = dirNodes.has(c.path.toLowerCase());
+
+    if (!c.exists) {
+      // Archivo o carpeta eliminados: quitar del índice todo lo que colgaba de ahí.
+      fileIndex = fileIndex.filter((f) => {
+        const k = f.toLowerCase();
+        return k !== relKey && !k.startsWith(relKey + "/");
+      });
+      forServers.push({ path: c.path, type: 3 });
+      for (const t of tabs) {
+        if (samePath(t.path, c.path) || (wasDir && t.path.toLowerCase().startsWith(c.path.toLowerCase() + sep))) {
+          markDeleted(t);
+        }
+      }
+    } else if (!c.is_dir) {
+      const isNew = !indexed.has(relKey);
+      if (isNew) { fileIndex.push(rel); indexed.add(relKey); }
+      forServers.push({ path: c.path, type: isNew ? 1 : 2 });
+      const tab = findTab(c.path);
+      if (tab) syncTabFromDisk(tab);
+    }
+  }
+
+  lspServers.notifyWatchedFiles(forServers);
+  for (const dir of dirsToReload.values()) await dirNodes.get(dir.toLowerCase())?.reload();
+}
+
+function markDeleted(tab: Tab) {
+  tab.el.classList.add("deleted");
+  tab.el.title = `${tab.path} (eliminado del disco; Ctrl+S lo vuelve a crear)`;
+}
+
+/** Recarga una pestaña si su archivo cambió fuera del editor. */
+async function syncTabFromDisk(tab: Tab) {
+  let text: string;
+  try {
+    text = await invoke<string>("read_file", { path: tab.path });
+  } catch {
+    return;
+  }
+  tab.el.classList.remove("deleted");
+  tab.el.title = tab.path;
+  const disk = text.replace(/\r\n/g, "\n");
+  if (disk === tab.saved.toString()) return; // es nuestro propio guardado
+  if (isDirty(tab)) {
+    tab.el.classList.add("conflict");
+    status(`${baseName(tab.path)} cambió en disco y tienes cambios sin guardar (Ctrl+S sobrescribirá)`);
+    return;
+  }
+  // Reemplazar solo el tramo distinto para no perder la posición del cursor.
+  const state = stateOf(tab);
+  const old = state.doc.toString();
+  let a = 0;
+  while (a < old.length && a < disk.length && old[a] === disk[a]) a++;
+  let b = 0;
+  while (b < old.length - a && b < disk.length - a && old[old.length - 1 - b] === disk[disk.length - 1 - b]) b++;
+  const spec = {
+    changes: { from: a, to: old.length - b, insert: Text.of(disk.slice(a, disk.length - b).split("\n")) },
+    annotations: Transaction.addToHistory.of(true),
+  };
+  if (tab === active) view.dispatch(spec);
+  else tab.state = tab.state.update(spec).state;
+  tab.saved = stateOf(tab).doc;
+  tab.el.classList.remove("conflict");
+  refreshDirty();
+  status(`${baseName(tab.path)} se recargó (cambió fuera del editor)`);
 }
 
 // ---------- Ctrl+clic / F12 ----------
@@ -358,7 +719,18 @@ async function openFolder(path: string) {
   lspServers.start(root);
   fileNodes.clear();
   dirNodes.clear();
+  expandedDirs.clear();
+  problems.clear();
+  const rootPath = root;
+  dirNodes.set(rootPath.toLowerCase(), {
+    row: null,
+    children: $("tree"),
+    childDepth: 0,
+    setOpen: async () => {},
+    reload: () => renderDir($("tree"), rootPath, 0),
+  });
   await renderDir($("tree"), root, 0);
+  watchRoot(root);
   updateTitle();
   refreshIndex().then(() => status(`${fileIndex.length} archivos indexados`));
 }

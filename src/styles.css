@@ -251,3 +251,46 @@ kbd {
 .cm-tooltip-hover, .cm-tooltip-lint { padding: 4px 8px; }
 .cm-tooltip-hover pre, .cm-tooltip-hover code { font-family: var(--font-code); font-size: 12px; white-space: pre-wrap; }
 .cm-panel.cm-dialog input { font: 13px var(--font-code); padding: 2px 6px; }
+/* ---------- operaciones de archivos ---------- */
+
+#tree:focus { outline: none; }
+#tree .node.selected { outline: 1px solid #528bff66; outline-offset: -1px; }
+#tree:focus .node.selected { outline-color: #528bff; }
+
+#tree .node.editing { padding-top: 1px; padding-bottom: 1px; }
+#tree .node.editing::before { content: ""; display: inline-block; width: 14px; }
+#tree .node.editing input {
+  width: calc(100% - 14px);
+  background: var(--bg);
+  color: var(--fg-bright);
+  border: 1px solid #528bff;
+  outline: none;
+  font: inherit;
+  padding: 0 4px;
+}
+#tree .node.editing input.invalid { border-color: #e06c75; }
+
+#ctxmenu {
+  position: fixed;
+  z-index: 20;
+  min-width: 220px;
+  padding: 4px 0;
+  background: var(--bg-side);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  box-shadow: 0 6px 24px #0009;
+}
+#ctxmenu hr { border: 0; border-top: 1px solid var(--bg-active); margin: 4px 0; }
+.menu-item {
+  display: flex;
+  justify-content: space-between;
+  gap: 24px;
+  padding: 4px 14px;
+  cursor: pointer;
+}
+.menu-item:hover { background: var(--bg-active); color: var(--fg-bright); }
+.menu-item.danger:hover { background: #be5046; }
+.menu-item kbd { background: none; color: var(--fg-dim); padding: 0; }
+
+.tab.deleted .tab-name { text-decoration: line-through; opacity: .7; }
+.tab.conflict .tab-name { color: #d19a66; font-style: italic; }

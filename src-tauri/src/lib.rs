@@ -1,3 +1,4 @@
+mod fsops;
 mod lsp;
 
 use ignore::WalkBuilder;
@@ -7,7 +8,7 @@ use std::path::Path;
 use tauri::Manager;
 
 /// Directorios que nunca queremos recorrer, aunque no estén en .gitignore.
-const SKIP_DIRS: &[&str] = &["node_modules", ".git", ".angular", "dist", ".nx", "coverage"];
+pub(crate) const SKIP_DIRS: &[&str] = &["node_modules", ".git", ".angular", "dist", ".nx", "coverage"];
 const MAX_FILES: usize = 50_000;
 const MAX_HITS: usize = 2_000;
 const MAX_SEARCH_FILE_BYTES: u64 = 2 * 1024 * 1024;
@@ -129,6 +130,7 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .manage(lsp::Servers::default())
+        .manage(fsops::Watcher::default())
         .invoke_handler(tauri::generate_handler![
             list_dir,
             read_file,
@@ -137,7 +139,13 @@ pub fn run() {
             search,
             lsp::lsp_start,
             lsp::lsp_send,
-            lsp::lsp_stop
+            lsp::lsp_stop,
+            fsops::create_file,
+            fsops::create_dir,
+            fsops::rename_path,
+            fsops::delete_path,
+            fsops::reveal_in_explorer,
+            fsops::watch_root
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
