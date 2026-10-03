@@ -30,12 +30,14 @@ impl Servers {
 /// instalada o, en desarrollo, la del repositorio.
 fn servers_home(app: &AppHandle) -> PathBuf {
     if let Ok(res) = app.path().resource_dir() {
-        let bundled = res.join("lsp-servers");
+        // En Windows resource_dir() devuelve rutas "\\?\C:\..." que Node no sabe
+        // ejecutar (falla con EISDIR lstat 'C:'): hay que pasarlas a ruta normal.
+        let bundled = dunce::simplified(&res).join("lsp-servers");
         if bundled.join("node_modules/@angular/language-server").exists() {
             return bundled;
         }
     }
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../lsp-servers")
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("..").join("lsp-servers")
 }
 
 fn server_args(app: &AppHandle, kind: &str, root: &str) -> Result<Vec<String>, String> {
@@ -125,17 +127,30 @@ pub fn lsp_start(
     let stdout = child.stdout.take().unwrap();
     let stderr = child.stderr.take().unwrap();
 
+    // Las últimas líneas de stderr se guardan para explicar por qué murió el servidor.
+    let tag = id.clone();
+    let stderr_thread = std::thread::spawn(move || {
+        let mut tail: Vec<String> = Vec::new();
+        for l in BufReader::new(stderr).lines().map_while(Result::ok) {
+            eprintln!("[lsp {tag}] {l}");
+            tail.push(l);
+            if tail.len() > 30 {
+                tail.remove(0);
+            }
+        }
+        tail
+    });
     let exit_channel = on_message.clone();
     std::thread::spawn(move || {
         pump(stdout, on_message);
-        // Aviso sintético para que el frontend sepa que el servidor murió.
-        let _ = exit_channel.send(r#"{"jsonrpc":"2.0","method":"$/editor/exited"}"#.into());
-    });
-    let tag = id.clone();
-    std::thread::spawn(move || {
-        for l in BufReader::new(stderr).lines().map_while(Result::ok) {
-            eprintln!("[lsp {tag}] {l}");
-        }
+        let tail = stderr_thread.join().unwrap_or_default();
+        // Aviso sintético para que el frontend sepa que el servidor murió y por qué.
+        let msg = serde_json::json!({
+            "jsonrpc": "2.0",
+            "method": "$/editor/exited",
+            "params": { "stderr": tail.join("\n") },
+        });
+        let _ = exit_channel.send(msg.to_string());
     });
 
     servers.0.lock().unwrap().insert(id, Server { child, stdin });

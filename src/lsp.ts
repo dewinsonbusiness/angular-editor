@@ -134,7 +134,7 @@ class TabWorkspace extends Workspace {
 async function startTransport(
   id: string, kind: Kind, root: string,
   answer: (method: string, params: any) => Promise<unknown>,
-  onExit: () => void,
+  onExit: (stderr: string) => void,
 ): Promise<Transport> {
   const handlers = new Set<(msg: string) => void>();
   let queue: string[] = [];
@@ -160,7 +160,7 @@ async function startTransport(
   const channel = new Channel<string>();
   channel.onmessage = async (raw) => {
     const msg = JSON.parse(raw);
-    if (msg.method === "$/editor/exited") { onExit(); return; }
+    if (msg.method === "$/editor/exited") { onExit(msg.params?.stderr ?? ""); return; }
     // Peticiones del servidor al cliente: el cliente de CodeMirror no las atiende.
     if (msg.method && msg.id !== undefined) {
       let result: unknown = null;
@@ -197,7 +197,15 @@ export class LspManager {
         const transport = await startTransport(
           id, kind, root,
           (method, params) => this.answer(method, params),
-          () => { if (gen === this.generation) this.host.status(`El servidor ${kind} se detuvo`); },
+          (stderr) => {
+            if (gen !== this.generation) return;
+            // La línea más útil suele ser la del error ("Error: ...").
+            const lines = stderr.split("\n").map((l) => l.trim()).filter(Boolean);
+            const reason = lines.find((l) => /\b\w*Error\b/.test(l)) ?? lines[lines.length - 1] ?? "sin detalles";
+            const name = kind === "angular" ? "Angular" : "TypeScript";
+            this.host.status(`El servidor de ${name} se cerró: ${reason}`);
+            if (stderr) console.error(`[lsp ${kind}] se cerró:\n${stderr}`);
+          },
         );
         if (gen !== this.generation) return void invoke("lsp_stop", { id });
         let ws!: TabWorkspace;
