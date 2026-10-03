@@ -145,6 +145,7 @@ pub fn run() {
             fsops::rename_path,
             fsops::delete_path,
             fsops::reveal_in_explorer,
+            fsops::ng_generate,
             fsops::watch_root
         ])
         .build(tauri::generate_context!())

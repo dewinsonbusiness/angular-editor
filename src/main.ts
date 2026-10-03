@@ -1,6 +1,6 @@
 import { invoke, Channel } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { open, ask } from "@tauri-apps/plugin-dialog";
+import { open, ask, message } from "@tauri-apps/plugin-dialog";
 import { EditorState, Text, Transaction } from "@codemirror/state";
 import { EditorView, keymap } from "@codemirror/view";
 import { indentWithTab } from "@codemirror/commands";
@@ -341,38 +341,59 @@ async function revealInTree(path: string) {
 
 // ---------- menú contextual y operaciones de archivos ----------
 
-interface MenuItem { label: string; hint?: string; danger?: boolean; action: () => void }
+interface MenuItem {
+  label: string;
+  hint?: string;
+  danger?: boolean;
+  action?: () => void;
+  submenu?: (MenuItem | "-")[];
+}
 
-function showMenu(x: number, y: number, items: (MenuItem | "-")[]) {
-  closeMenu();
+function showMenu(x: number, y: number, items: (MenuItem | "-")[], level = 0) {
+  // Al abrir un menú se cierran los de su nivel o más profundos.
+  document.querySelectorAll<HTMLElement>(".ctxmenu").forEach((m) => { if (+m.dataset.level! >= level) m.remove(); });
   const menu = document.createElement("div");
-  menu.id = "ctxmenu";
+  menu.className = "ctxmenu";
+  menu.dataset.level = String(level);
   menu.setAttribute("role", "menu");
   for (const it of items) {
     if (it === "-") { menu.appendChild(document.createElement("hr")); continue; }
     const el = document.createElement("div");
-    el.className = "menu-item" + (it.danger ? " danger" : "");
+    el.className = "menu-item" + (it.danger ? " danger" : "") + (it.submenu ? " has-submenu" : "");
     el.setAttribute("role", "menuitem");
     el.innerHTML = `<span></span><kbd></kbd>`;
     el.firstElementChild!.textContent = it.label;
-    el.lastElementChild!.textContent = it.hint ?? "";
+    el.lastElementChild!.textContent = it.submenu ? "▸" : it.hint ?? "";
     el.addEventListener("mousedown", (e) => e.preventDefault());
-    el.addEventListener("click", () => { closeMenu(); it.action(); });
+    const openSub = () => {
+      const r = el.getBoundingClientRect();
+      showMenu(r.right - 2, r.top - 5, it.submenu!, level + 1);
+    };
+    if (it.submenu) {
+      el.addEventListener("mouseenter", openSub);
+      el.addEventListener("click", openSub);
+    } else {
+      el.addEventListener("mouseenter", () => {
+        document.querySelectorAll<HTMLElement>(".ctxmenu").forEach((m) => { if (+m.dataset.level! > level) m.remove(); });
+      });
+      el.addEventListener("click", () => { closeMenu(); it.action?.(); });
+    }
     menu.appendChild(el);
   }
   document.body.appendChild(menu);
-  // Mantenerlo dentro de la ventana.
+  // Mantenerlo dentro de la ventana (un submenú que no cabe se abre hacia la izquierda).
   const r = menu.getBoundingClientRect();
-  menu.style.left = `${Math.min(x, innerWidth - r.width - 4)}px`;
-  menu.style.top = `${Math.min(y, innerHeight - r.height - 4)}px`;
+  const left = x + r.width > innerWidth - 4 && level > 0 ? x - r.width * 2 + 4 : Math.min(x, innerWidth - r.width - 4);
+  menu.style.left = `${Math.max(4, left)}px`;
+  menu.style.top = `${Math.max(4, Math.min(y, innerHeight - r.height - 4))}px`;
 }
 
 function closeMenu() {
-  document.getElementById("ctxmenu")?.remove();
+  document.querySelectorAll(".ctxmenu").forEach((m) => m.remove());
 }
 
 window.addEventListener("mousedown", (e) => {
-  if (!(e.target as HTMLElement).closest("#ctxmenu")) closeMenu();
+  if (!(e.target as HTMLElement).closest(".ctxmenu")) closeMenu();
 });
 window.addEventListener("blur", closeMenu);
 
@@ -389,6 +410,10 @@ $("tree").addEventListener("contextmenu", (ev) => {
     items.push(
       { label: "Nuevo archivo…", action: () => createEntry(path, "file") },
       { label: "Nueva carpeta…", action: () => createEntry(path, "dir") },
+      {
+        label: "Angular: generar",
+        submenu: SCHEMATICS.map((s) => s === "-" ? s : { label: `${s.label}…`, action: () => ngGenerate(path, s) }),
+      },
     );
   } else {
     items.push({ label: "Abrir", action: () => openFile(path) });
@@ -425,15 +450,22 @@ function copyText(text: string) {
 }
 
 const INVALID_NAME = /[<>:"|?*\\/]|^\.{1,2}$|^\s|\s$/;
+// Para `ng generate` se permite "carpeta/nombre", pero no espacios ni caracteres raros.
+const INVALID_NG_NAME = /[<>:"|?*\\\s]|^\/|\/$|\.\./;
 
 /** Campo de texto dentro del árbol (como en VS Code). Resuelve con el nombre o null si se cancela. */
-function inlineInput(container: HTMLElement, before: Node | null, depth: number, initial = "", selectEnd?: number) {
+function inlineInput(
+  container: HTMLElement, before: Node | null, depth: number, initial = "", selectEnd?: number,
+  opts: { placeholder?: string; invalid?: RegExp } = {},
+) {
+  const invalid = opts.invalid ?? INVALID_NAME;
   return new Promise<string | null>((resolve) => {
     const wrap = document.createElement("div");
     wrap.className = "node editing";
     wrap.style.paddingLeft = indent(depth);
     const input = document.createElement("input");
     input.value = initial;
+    input.placeholder = opts.placeholder ?? "";
     input.spellcheck = false;
     wrap.appendChild(input);
     container.insertBefore(wrap, before);
@@ -447,12 +479,12 @@ function inlineInput(container: HTMLElement, before: Node | null, depth: number,
       resolve(value);
     };
     input.addEventListener("input", () => {
-      input.classList.toggle("invalid", INVALID_NAME.test(input.value));
+      input.classList.toggle("invalid", invalid.test(input.value));
     });
     const commit = (keepOpenIfInvalid: boolean) => {
       const v = input.value.trim();
       if (!v || v === initial) return finish(null);
-      if (INVALID_NAME.test(v)) {
+      if (invalid.test(v)) {
         status(`Nombre no válido: ${v}`);
         return keepOpenIfInvalid ? undefined : finish(null);
       }
@@ -556,6 +588,70 @@ async function deleteEntry(path: string, isDir: boolean) {
   }
   await dirNodes.get(parentOf(path).toLowerCase())?.reload();
   status(`${name} se movió a la papelera`);
+}
+
+// ---------- ng generate ----------
+
+interface Schematic { id: string; label: string; example: string }
+
+const SCHEMATICS: (Schematic | "-")[] = [
+  { id: "component", label: "Componente", example: "user-card" },
+  { id: "service", label: "Servicio", example: "user" },
+  { id: "directive", label: "Directiva", example: "highlight" },
+  { id: "pipe", label: "Pipe", example: "short-date" },
+  "-",
+  { id: "guard", label: "Guard", example: "auth" },
+  { id: "interceptor", label: "Interceptor", example: "auth" },
+  { id: "resolver", label: "Resolver", example: "user" },
+  "-",
+  { id: "interface", label: "Interface", example: "user" },
+  { id: "enum", label: "Enum", example: "status" },
+  { id: "class", label: "Clase", example: "user-model" },
+];
+
+let ngBusy = false;
+
+async function ngGenerate(dir: string, s: Schematic) {
+  if (ngBusy) return status("Ya hay un ng generate en curso…");
+  const node = dirNodes.get(dir.toLowerCase());
+  if (!node) return;
+  await node.setOpen(true);
+  const name = await inlineInput(node.children, node.children.firstChild, node.childDepth, "", undefined, {
+    placeholder: `${s.label}, p. ej. ${s.example}`,
+    invalid: INVALID_NG_NAME,
+  });
+  if (!name) return;
+
+  ngBusy = true;
+  const label = `Generando ${s.label.toLowerCase()} «${name}»`;
+  const t0 = performance.now();
+  status(`${label}…`);
+  const timer = setInterval(() => status(`${label}… ${Math.round((performance.now() - t0) / 1000)} s`), 1000);
+  try {
+    const res = await invoke<{ workspace: string; tool: string; command: string; output: string }>(
+      "ng_generate", { cwd: dir, schematic: s.id, name },
+    );
+    const created = [...res.output.matchAll(/^CREATE (\S+)/gm)]
+      .map((m) => res.workspace + sep + m[1].split("/").join(sep));
+    await node.reload();
+    if (!created.length) {
+      status(`${res.command}: no se creó ningún archivo`);
+      message(`No se creó ningún archivo (puede que ya exista).\n\n$ ${res.command}\n${res.output.trim()}`, {
+        title: s.label, kind: "info",
+      });
+      return;
+    }
+    const main = created.find((p) => p.endsWith(".ts") && !p.endsWith(".spec.ts")) ?? created[0];
+    await openFile(main);
+    status(`${s.label} «${name}» creado con ${res.tool} (${created.length} archivo${created.length === 1 ? "" : "s"})`);
+  } catch (e) {
+    const msg = String(e).trim();
+    status(`${label} falló: ${msg.split("\n")[0]}`);
+    message(msg, { title: `No se pudo generar: ${s.label}`, kind: "error" });
+  } finally {
+    clearInterval(timer);
+    ngBusy = false;
+  }
 }
 
 // ---------- cambios hechos fuera del editor ----------

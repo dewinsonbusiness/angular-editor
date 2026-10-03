@@ -4,7 +4,7 @@ use notify_debouncer_mini::notify::{RecommendedWatcher, RecursiveMode};
 use notify_debouncer_mini::{new_debouncer, DebounceEventResult, Debouncer};
 use serde::Serialize;
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::time::Duration;
 use tauri::ipc::Channel;
@@ -54,6 +54,142 @@ pub fn reveal_in_explorer(path: String) -> Result<(), String> {
         .arg(Path::new(&path).parent().unwrap_or(Path::new("/")))
         .spawn();
     r.map(|_| ()).map_err(|e| e.to_string())
+}
+
+// ---------- Angular CLI ----------
+
+#[derive(Serialize)]
+pub struct GenerateResult {
+    /// Raíz del workspace; las rutas de la salida (`CREATE src/...`) son relativas a ella.
+    workspace: String,
+    /// "nx" o "ng".
+    tool: &'static str,
+    command: String,
+    output: String,
+}
+
+enum Workspace {
+    Nx { root: PathBuf, bin: PathBuf },
+    Ng { root: PathBuf, bin: PathBuf },
+}
+
+/// Ruta del ejecutable de `nx` según el campo `bin` de su package.json (cambia entre versiones).
+fn nx_bin(root: &Path) -> Option<PathBuf> {
+    let pkg_dir = root.join("node_modules/nx");
+    let pkg: serde_json::Value = serde_json::from_str(&fs::read_to_string(pkg_dir.join("package.json")).ok()?).ok()?;
+    let rel = match &pkg["bin"] {
+        serde_json::Value::String(s) => s.clone(),
+        v => v["nx"].as_str()?.to_string(),
+    };
+    Some(pkg_dir.join(rel)).filter(|p| p.exists())
+}
+
+/// Comando de instalación según el gestor de paquetes del workspace.
+fn install_hint(root: &Path) -> &'static str {
+    if root.join("pnpm-lock.yaml").exists() || root.join("pnpm-workspace.yaml").exists() {
+        "pnpm install"
+    } else if root.join("yarn.lock").exists() {
+        "yarn install"
+    } else if root.join("bun.lockb").exists() || root.join("bun.lock").exists() {
+        "bun install"
+    } else {
+        "npm install"
+    }
+}
+
+fn not_installed(root: &Path, what: &str) -> String {
+    let why = if root.join("node_modules").exists() {
+        format!("node_modules existe pero falta {what}.")
+    } else {
+        "No hay carpeta node_modules: las dependencias no están instaladas.".to_string()
+    };
+    format!(
+        "Workspace encontrado en {}\n\n{why}\n\nEjecuta en esa carpeta:\n    {}",
+        root.display(),
+        install_hint(root)
+    )
+}
+
+/// Busca hacia arriba desde `cwd`. Nx tiene prioridad: un `nx.json`, o un `project.json`
+/// dentro de un repo con `nx` instalado. Si no, el `angular.json` más cercano.
+fn detect_workspace(cwd: &Path) -> Result<Workspace, String> {
+    let mut saw_project_json = false;
+    let mut angular_root: Option<PathBuf> = None;
+    for dir in cwd.ancestors() {
+        saw_project_json |= dir.join("project.json").exists();
+        if dir.join("nx.json").exists() || (saw_project_json && dir.join("node_modules/nx").exists()) {
+            let bin = nx_bin(dir).ok_or_else(|| not_installed(dir, "el paquete `nx`"))?;
+            return Ok(Workspace::Nx { root: dir.to_path_buf(), bin });
+        }
+        if angular_root.is_none() && dir.join("angular.json").exists() {
+            angular_root = Some(dir.to_path_buf());
+        }
+    }
+    let root = angular_root
+        .ok_or("No se encontró nx.json, project.json ni angular.json en esta carpeta ni en sus superiores.")?;
+    let bin = root.join("node_modules/@angular/cli/bin/ng.js");
+    if !bin.exists() {
+        return Err(not_installed(&root, "el paquete `@angular/cli`"));
+    }
+    Ok(Workspace::Ng { root, bin })
+}
+
+/// `ng generate` o `nx g` según el workspace que contiene `cwd`, sin preguntas interactivas.
+#[tauri::command]
+pub async fn ng_generate(cwd: String, schematic: String, name: String) -> Result<GenerateResult, String> {
+    let (root, bin, tool, args): (PathBuf, PathBuf, &'static str, Vec<String>) =
+        match detect_workspace(Path::new(&cwd))? {
+            Workspace::Ng { root, bin } => {
+                let args = vec!["generate".into(), schematic, name, "--defaults".into(), "--interactive=false".into()];
+                (root, bin, "ng", args)
+            }
+            Workspace::Nx { root, bin } => {
+                // @nx/angular solo trae component/directive/pipe; el resto sale de @schematics/angular.
+                let has_nx_angular = root.join("node_modules/@nx/angular").exists();
+                let nx_native = has_nx_angular && matches!(schematic.as_str(), "component" | "directive" | "pipe");
+                let generator = if nx_native {
+                    format!("@nx/angular:{schematic}")
+                } else {
+                    format!("@schematics/angular:{schematic}")
+                };
+                // Nx usa la ruta tal cual: para imitar a `ng`, el componente va en su propia carpeta.
+                let target = if nx_native && schematic == "component" {
+                    let last = name.rsplit('/').next().unwrap_or(&name).to_string();
+                    format!("{name}/{last}")
+                } else {
+                    name
+                };
+                (root, bin, "nx", vec!["g".into(), generator, target, "--no-interactive".into()])
+            }
+        };
+    let command = format!("{tool} {}", args.join(" "));
+    let output = tauri::async_runtime::spawn_blocking(move || {
+        let mut cmd = std::process::Command::new("node");
+        cmd.arg(bin)
+            .args(&args)
+            .current_dir(&cwd)
+            .env("NG_CLI_ANALYTICS", "false")
+            .env("NX_TUI", "false")
+            .env("NO_COLOR", "1")
+            .env("FORCE_COLOR", "0")
+            .stdin(std::process::Stdio::null());
+        #[cfg(windows)]
+        {
+            use std::os::windows::process::CommandExt;
+            cmd.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
+        }
+        let out = cmd.output().map_err(|e| format!("no se pudo ejecutar node: {e}"))?;
+        let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
+        let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
+        if out.status.success() {
+            Ok(stdout)
+        } else {
+            Err(if stderr.trim().is_empty() { stdout } else { stderr })
+        }
+    })
+    .await
+    .map_err(|e| e.to_string())??;
+    Ok(GenerateResult { workspace: root.to_string_lossy().into_owned(), tool, command, output })
 }
 
 // ---------- vigilancia ----------

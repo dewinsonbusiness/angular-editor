@@ -270,7 +270,7 @@ kbd {
 }
 #tree .node.editing input.invalid { border-color: #e06c75; }
 
-#ctxmenu {
+.ctxmenu {
   position: fixed;
   z-index: 20;
   min-width: 220px;
@@ -280,7 +280,7 @@ kbd {
   border-radius: 6px;
   box-shadow: 0 6px 24px #0009;
 }
-#ctxmenu hr { border: 0; border-top: 1px solid var(--bg-active); margin: 4px 0; }
+.ctxmenu hr { border: 0; border-top: 1px solid var(--bg-active); margin: 4px 0; }
 .menu-item {
   display: flex;
   justify-content: space-between;
@@ -294,3 +294,5 @@ kbd {
 
 .tab.deleted .tab-name { text-decoration: line-through; opacity: .7; }
 .tab.conflict .tab-name { color: #d19a66; font-style: italic; }
+.menu-item.has-submenu kbd { font-size: 10px; }
+#tree .node.editing input::placeholder { color: var(--fg-dim); font-style: italic; }
