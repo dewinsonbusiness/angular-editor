@@ -1,0 +1,10 @@
+{
+    "name":  "editor-angular-lsp-servers",
+    "private":  true,
+    "description":  "Language servers empaquetados con el editor",
+    "dependencies":  {
+                         "@angular/language-server":  "^22.2.1",
+                         "typescript-language-server":  "^6.0.1",
+                         "typescript":  "~6.0.3"
+                     }
+}

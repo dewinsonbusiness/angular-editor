@@ -26,15 +26,16 @@ impl Servers {
     }
 }
 
-/// Carpeta que contiene `node_modules` con los servidores.
-/// En desarrollo es la raíz del repo; empaquetado será el directorio de recursos.
+/// Carpeta `lsp-servers` (con su `node_modules`): dentro de los recursos de la app
+/// instalada o, en desarrollo, la del repositorio.
 fn servers_home(app: &AppHandle) -> PathBuf {
     if let Ok(res) = app.path().resource_dir() {
-        if res.join("node_modules/@angular/language-server").exists() {
-            return res;
+        let bundled = res.join("lsp-servers");
+        if bundled.join("node_modules/@angular/language-server").exists() {
+            return bundled;
         }
     }
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("..")
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../lsp-servers")
 }
 
 fn server_args(app: &AppHandle, kind: &str, root: &str) -> Result<Vec<String>, String> {

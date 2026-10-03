@@ -122,6 +122,7 @@ function updatePos() {
   const head = view.state.selection.main.head;
   const line = view.state.doc.lineAt(head);
   $("status-pos").textContent = `Ln ${line.number}, Col ${head - line.from + 1}`;
+  saveSession();
 }
 
 function refreshDirty() {
@@ -156,6 +157,7 @@ function activate(tab: Tab) {
   updatePos();
   updateTitle();
   view.focus();
+  saveSession();
 }
 
 async function openFile(path: string, line?: number, col = 0) {
@@ -194,19 +196,73 @@ async function openFile(path: string, line?: number, col = 0) {
   }
 }
 
-async function save() {
-  if (!active) return;
-  const tab = active;
-  const doc = view.state.doc;
+async function saveTab(tab: Tab): Promise<boolean> {
+  const state = stateOf(tab);
   try {
     // sliceDoc usa el separador de línea del estado (preserva CRLF).
-    await invoke("write_file", { path: tab.path, contents: view.state.sliceDoc() });
-    tab.saved = doc;
+    await invoke("write_file", { path: tab.path, contents: state.sliceDoc() });
+    tab.saved = state.doc;
     tab.el.classList.remove("deleted", "conflict");
     refreshDirty();
-    status(`Guardado ${baseName(tab.path)}`);
+    return true;
   } catch (e) {
-    status(`Error al guardar: ${e}`);
+    status(`Error al guardar ${baseName(tab.path)}: ${e}`);
+    return false;
+  }
+}
+
+async function save() {
+  if (active && (await saveTab(active))) status(`Guardado ${baseName(active.path)}`);
+}
+
+async function saveAll() {
+  const dirty = tabs.filter((t) => isDirty(t) || t.el.classList.contains("deleted"));
+  if (!dirty.length) return status("No hay cambios sin guardar");
+  const ok = (await Promise.all(dirty.map(saveTab))).filter(Boolean).length;
+  status(`Guardados ${ok} de ${dirty.length} archivo(s)`);
+}
+
+// ---------- sesión: pestañas abiertas por proyecto ----------
+
+interface Session { tabs: { path: string; pos: number }[]; active: string | null }
+
+const sessionKey = (r: string) => `editor-angular:session:${r.toLowerCase()}`;
+let restoringSession = false;
+let sessionTimer = 0;
+
+function saveSession() {
+  if (!root || restoringSession) return;
+  clearTimeout(sessionTimer);
+  sessionTimer = window.setTimeout(saveSessionNow, 300);
+}
+
+function saveSessionNow() {
+  if (!root || restoringSession) return;
+  const session: Session = {
+    tabs: tabs.map((t) => ({ path: t.path, pos: stateOf(t).selection.main.head })),
+    active: active?.path ?? null,
+  };
+  try { localStorage.setItem(sessionKey(root), JSON.stringify(session)); } catch {}
+}
+
+async function restoreSession(r: string) {
+  let session: Session | null = null;
+  try { session = JSON.parse(localStorage.getItem(sessionKey(r)) ?? "null"); } catch {}
+  if (!session?.tabs.length) return;
+  restoringSession = true;
+  try {
+    for (const { path, pos } of session.tabs) {
+      if (root !== r) return; // el usuario abrió otro proyecto mientras tanto
+      const exists = await invoke<string>("read_file", { path }).then(() => true, () => false);
+      if (!exists) continue;
+      await openFile(path);
+      const p = Math.min(pos, view.state.doc.length);
+      view.dispatch({ selection: { anchor: p }, effects: EditorView.scrollIntoView(p, { y: "center" }) });
+    }
+    const last = session.active && findTab(session.active);
+    if (last) activate(last);
+  } finally {
+    restoringSession = false;
   }
 }
 
@@ -221,6 +277,7 @@ async function closeTab(tab: Tab, force = false) {
   tabs.splice(i, 1);
   tab.el.remove();
   lspServers.release(tab.path);
+  saveSession();
   if (tab !== active) return refreshDirty();
   active = null;
   const next = tabs[i] ?? tabs[i - 1];
@@ -805,6 +862,7 @@ async function closeAllTabs(): Promise<boolean> {
 }
 
 async function openFolder(path: string) {
+  saveSessionNow();
   if (!(await closeAllTabs())) return;
   root = path.replace(/[\\/]+$/, "");
   sep = root.includes("\\") ? "\\" : "/";
@@ -829,6 +887,7 @@ async function openFolder(path: string) {
   await renderDir($("tree"), root, 0);
   watchRoot(root);
   servePanel.loadTargets(root);
+  await restoreSession(root);
   updateTitle();
   refreshIndex().then(() => status(`${fileIndex.length} archivos indexados`));
 }
@@ -1037,11 +1096,24 @@ async function cycleCompanion() {
 
 // ---------- atajos globales ----------
 
+// Acordes estilo VS Code: Ctrl+K y luego otra tecla.
+let chordUntil = 0;
+
 window.addEventListener("keydown", (e) => {
   const ctrl = e.ctrlKey || e.metaKey;
   const k = e.key.toLowerCase();
+  if (["control", "shift", "alt", "meta"].includes(k)) return;
   let handled = true;
-  if (ctrl && !e.shiftKey && k === "s") save();
+  if (Date.now() < chordUntil) {
+    chordUntil = 0;
+    if (k === "s") saveAll();
+    else status("");
+  }
+  else if (ctrl && !e.shiftKey && k === "k") {
+    chordUntil = Date.now() + 2000;
+    status("Ctrl+K pulsado… (S = guardar todo)");
+  }
+  else if (ctrl && !e.shiftKey && k === "s") save();
   else if (ctrl && !e.shiftKey && k === "p") showPalette();
   else if (ctrl && e.shiftKey && k === "f") showSearch();
   else if (ctrl && !e.shiftKey && k === "o") pickFolder();
@@ -1060,6 +1132,7 @@ window.addEventListener("keydown", (e) => {
 $("open-folder").addEventListener("click", pickFolder);
 
 appWindow.onCloseRequested(async (e) => {
+  saveSessionNow();
   const dirty = tabs.filter(isDirty);
   if (!dirty.length) return;
   const discard = await ask(
@@ -1069,7 +1142,10 @@ appWindow.onCloseRequested(async (e) => {
   if (!discard) e.preventDefault();
 });
 
-window.addEventListener("beforeunload", () => lspServers.stop());
+window.addEventListener("beforeunload", () => {
+  saveSessionNow();
+  lspServers.stop();
+});
 
 // ---------- arranque ----------
 
