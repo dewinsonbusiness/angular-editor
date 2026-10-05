@@ -13,6 +13,8 @@
     "windows": [
       {
         "title": "Editor Angular",
+        "theme": "Dark",
+        "backgroundColor": "#282c34",
         "width": 1280,
         "height": 800,
         "minWidth": 600,

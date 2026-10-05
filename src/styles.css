@@ -15,6 +15,16 @@
 
 * { box-sizing: border-box; }
 
+/* Controles nativos (barras de desplazamiento, selects, inputs) en modo oscuro. */
+:root { color-scheme: dark; }
+
+/* Barras de desplazamiento finas y oscuras, como en VS Code. */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: #4b526388 transparent;
+}
+*:hover { scrollbar-color: #5c6370cc transparent; }
+
 html, body {
   margin: 0;
   height: 100%;
@@ -98,7 +108,6 @@ button:hover { background: var(--accent); }
   background: var(--bg-side);
   border-bottom: 1px solid var(--border);
   min-height: 33px;
-  scrollbar-width: thin;
 }
 
 .tab {
