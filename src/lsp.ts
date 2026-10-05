@@ -183,7 +183,17 @@ const SEVERITY = ["error", "error", "warning", "info", "hint"] as const;
 
 export class LspManager {
   private servers = new Map<Kind, Server>();
-  private diagnostics = new Map<string, { doc: Text; items: lsp.Diagnostic[] }>();
+  private diagnostics = new Map<string, { path: string; doc: Text; items: lsp.Diagnostic[] }>();
+  private diagnosticsListeners = new Set<(path: string) => void>();
+
+  /** Diagnósticos actuales de todos los archivos abiertos (para Claude Code). */
+  allDiagnostics() {
+    return [...this.diagnostics.values()];
+  }
+
+  onDiagnosticsChanged(listener: (path: string) => void) {
+    this.diagnosticsListeners.add(listener);
+  }
   private generation = 0;
 
   constructor(private host: EditorHost) {}
@@ -302,7 +312,8 @@ export class LspManager {
     const file = client.workspace.getFile(params.uri);
     if (!file || (params.version != null && params.version !== file.version)) return true;
     const path = uriToPath(params.uri);
-    this.diagnostics.set(path.toLowerCase(), { doc: file.doc, items: params.diagnostics });
+    this.diagnostics.set(path.toLowerCase(), { path, doc: file.doc, items: params.diagnostics });
+    this.diagnosticsListeners.forEach((l) => l(path));
     const count = (sev: number) => params.diagnostics.filter((d) => (d.severity ?? 1) === sev).length;
     this.host.markProblems(path, count(1), count(2));
     const active = this.host.activePath();

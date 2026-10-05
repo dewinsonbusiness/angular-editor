@@ -1,4 +1,5 @@
 import { invoke, Channel } from "@tauri-apps/api/core";
+import { showPanel, hidePanel, togglePanel } from "./panel";
 
 /** Lo que el panel necesita del editor. */
 export interface ServeHost {
@@ -51,7 +52,6 @@ export class ServePanel {
     $("serve-restart").addEventListener("click", () => this.selected && this.restart(this.selected));
     $("serve-open").addEventListener("click", () => this.openInBrowser());
     $("serve-clear").addEventListener("click", () => this.selected?.out.replaceChildren());
-    $("panel-close").addEventListener("click", () => this.toggle(false));
     $("status-serve").addEventListener("click", () => this.toggle());
     $("serve-project").addEventListener("change", () => {
       try { localStorage.setItem(this.projectKey(), $<HTMLSelectElement>("serve-project").value); } catch {}
@@ -64,10 +64,10 @@ export class ServePanel {
     this.render();
   }
 
-  get isOpen() { return !$("panel").hidden; }
-
-  toggle(open = !this.isOpen) {
-    $("panel").hidden = !open;
+  toggle(open?: boolean) {
+    if (open === undefined) togglePanel("serve");
+    else if (open) showPanel("serve");
+    else hidePanel();
   }
 
   /** Al abrir un proyecto: lista rápida desde project.json / angular.json y luego la de Nx. */

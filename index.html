@@ -28,12 +28,18 @@
           <p><kbd>Alt</kbd>+<kbd>O</kbd> alternar .ts / .html / .scss</p>
           <p><kbd>F12</kbd> / <kbd>Ctrl</kbd>+clic ir a definición · <kbd>Shift</kbd>+<kbd>F12</kbd> referencias</p>
           <p><kbd>F2</kbd> renombrar · <kbd>Shift</kbd>+<kbd>Alt</kbd>+<kbd>F</kbd> formatear · <kbd>Ctrl</kbd>+<kbd>Espacio</kbd> autocompletar</p>
-          <p><kbd>Ctrl</kbd>+<kbd>S</kbd> guardar · <kbd>Ctrl</kbd>+<kbd>K</kbd> <kbd>S</kbd> guardar todo · <kbd>Ctrl</kbd>+<kbd>W</kbd> cerrar pestaña · <kbd>Ctrl</kbd>+<kbd>J</kbd> panel de serve · <kbd>Ctrl</kbd>+<kbd>,</kbd> configuración</p>
+          <p><kbd>Ctrl</kbd>+<kbd>S</kbd> guardar · <kbd>Ctrl</kbd>+<kbd>K</kbd> <kbd>S</kbd> guardar todo · <kbd>Ctrl</kbd>+<kbd>W</kbd> cerrar pestaña · <kbd>Ctrl</kbd>+<kbd>J</kbd> panel · <kbd>Ctrl</kbd>+<kbd>Ñ</kbd> terminal · <kbd>Ctrl</kbd>+<kbd>,</kbd> configuración</p>
         </div>
         <section id="panel" hidden>
           <div id="panel-resizer"></div>
+          <div class="panel-tabs" role="tablist">
+            <button class="panel-tab" data-view="serve" role="tab">Serve</button>
+            <button class="panel-tab" data-view="terminal" role="tab">Terminal</button>
+            <span class="spacer"></span>
+            <button id="panel-close" class="icon" title="Cerrar panel (Ctrl+J)">×</button>
+          </div>
+          <div id="view-serve" class="panel-view">
           <div class="panel-header">
-            <span class="panel-title">Serve</span>
             <select id="serve-project" title="App a servir"></select>
             <input id="serve-port" placeholder="puerto" title="Puerto (vacío = el de la configuración)" inputmode="numeric" />
             <button id="serve-start" title="Iniciar">▶ Iniciar</button>
@@ -43,14 +49,23 @@
             <button id="serve-restart" title="Reiniciar la app seleccionada">↻ Reiniciar</button>
             <button id="serve-stop" title="Detener">■ Detener</button>
             <button id="serve-clear" class="icon" title="Limpiar salida">⌫</button>
-            <button id="panel-close" class="icon" title="Cerrar panel (Ctrl+J)">×</button>
           </div>
           <div id="serve-output"></div>
+          </div>
+          <div id="view-terminal" class="panel-view" hidden>
+            <div class="panel-header">
+              <div id="term-sessions"></div>
+              <button id="term-new" title="Nueva terminal">+ Terminal</button>
+              <button id="term-claude" title="Abrir Claude Code en el proyecto">✳ Claude</button>
+            </div>
+            <div id="term-host"></div>
+          </div>
         </section>
       </main>
     </div>
     <footer id="status">
       <span id="status-msg"></span>
+      <span id="status-claude" class="status-button" title="Abrir Claude Code en la terminal">✳ Claude</span>
       <span id="status-autosave" class="status-button" title="Cambiar el modo de guardado"></span>
       <span id="status-serve" title="Panel de serve (Ctrl+J)"></span>
       <span id="status-pos"></span>

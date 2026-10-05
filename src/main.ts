@@ -9,6 +9,9 @@ import { oneDark } from "@codemirror/theme-one-dark";
 import { langFor } from "./lang";
 import { LspManager, samePath, type Location } from "./lsp";
 import { ServePanel } from "./serve";
+import { TerminalPanel } from "./terminal";
+import { setupPanel, isPanelOpen, showPanel, hidePanel } from "./panel";
+import { IdeBridge } from "./ide";
 import {
   settings, loadSettings, onSettingsChange, openSettings, setupSettingsUi, describeAutoSave,
 } from "./settings";
@@ -114,6 +117,7 @@ function makeState(path: string, doc: string): EditorState {
           refreshDirty();
           if (active) scheduleAutoSave(active);
         }
+        if (u.selectionSet || u.docChanged) ideBridge.selectionChanged();
         if (u.docChanged || u.selectionSet) updatePos();
       }),
     ],
@@ -165,6 +169,7 @@ function activate(tab: Tab) {
   updateTitle();
   view.focus();
   saveSession();
+  ideBridge.selectionChanged();
 }
 
 async function openFile(path: string, line?: number, col = 0) {
@@ -943,6 +948,7 @@ async function openFolder(path: string) {
   await renderDir($("tree"), root, 0);
   watchRoot(root);
   servePanel.loadTargets(root);
+  ideBridge.setWorkspace(root);
   await restoreSession(root);
   updateTitle();
   refreshIndex().then(() => status(`${fileIndex.length} archivos indexados`));
@@ -1159,8 +1165,14 @@ window.addEventListener("keydown", (e) => {
   const ctrl = e.ctrlKey || e.metaKey;
   const k = e.key.toLowerCase();
   if (["control", "shift", "alt", "meta"].includes(k)) return;
+  // Ctrl+Ñ (teclado español) o Ctrl+` : mostrar/ocultar la terminal, como en VS Code.
+  const terminalKey = ctrl && !e.shiftKey && (k === "ñ" || e.code === "Backquote");
+  // Dentro de la terminal, las teclas son de la shell (Ctrl+C, Ctrl+W, Ctrl+K…) salvo estas.
+  if (terminalPanel.hasFocus() && !terminalKey && !(ctrl && !e.shiftKey && k === "j")) return;
   let handled = true;
-  if (Date.now() < chordUntil) {
+  if (terminalKey) terminalPanel.toggle();
+  else if (ctrl && e.altKey && !e.shiftKey && k === "k") ideBridge.atMention();
+  else if (Date.now() < chordUntil) {
     chordUntil = 0;
     if (k === "s") saveAll();
     else status("");
@@ -1180,7 +1192,7 @@ window.addEventListener("keydown", (e) => {
   }
   else if (e.altKey && !ctrl && k === "o") cycleCompanion();
   else if (k === "f12" && !e.shiftKey && !ctrl && active) goToDefinition();
-  else if (ctrl && !e.shiftKey && k === "j") servePanel.toggle();
+  else if (ctrl && !e.shiftKey && k === "j") { if (isPanelOpen()) hidePanel(); else showPanel(); }
   else if (ctrl && !e.shiftKey && k === ",") openSettings();
   else handled = false;
   if (handled) { e.preventDefault(); e.stopPropagation(); }
@@ -1209,6 +1221,64 @@ window.addEventListener("beforeunload", () => {
 });
 
 // ---------- arranque ----------
+
+setupPanel();
+
+const terminalPanel = new TerminalPanel({
+  cwd: () => root,
+  env: () => ideBridge.terminalEnv(),
+  status,
+});
+
+const LANGUAGE_IDS: Record<string, string> = {
+  ts: "typescript", mts: "typescript", js: "javascript", mjs: "javascript", html: "html",
+  scss: "scss", sass: "sass", css: "css", json: "json", md: "markdown",
+};
+
+const ideBridge = new IdeBridge({
+  view,
+  root: () => root,
+  activePath: () => active?.path ?? null,
+  tabs: () => tabs.map((t) => ({
+    path: t.path,
+    state: stateOf(t),
+    dirty: isDirty(t),
+    active: t === active,
+    languageId: LANGUAGE_IDS[t.path.slice(t.path.lastIndexOf(".") + 1).toLowerCase()] ?? "plaintext",
+  })),
+  openFile: async (path) => {
+    await openFile(path);
+    return !!active && samePath(active.path, path);
+  },
+  save: async (path) => {
+    const t = findTab(path);
+    return t ? saveTab(t) : false;
+  },
+  diagnostics: () => lspServers.allDiagnostics().map((d) => ({
+    path: d.path,
+    lines: d.doc.lines,
+    items: d.items.map((i) => ({
+      message: typeof i.message === "string" ? i.message : i.message.value,
+      severity: i.severity,
+      range: i.range,
+      source: i.source,
+      code: i.code,
+    })),
+  })),
+  focusClaude: () => terminalPanel.openClaude(),
+  onConnection: (connected) => {
+    const el = $("status-claude");
+    el.textContent = connected ? "✳ Claude conectado" : "✳ Claude";
+    el.classList.toggle("on", connected);
+    el.title = connected
+      ? "Claude Code está conectado al editor (Ctrl+Alt+K envía la selección)"
+      : "Abrir Claude Code en la terminal";
+    status(connected ? "Claude Code se conectó al editor" : "Claude Code se desconectó");
+  },
+  status,
+});
+lspServers.onDiagnosticsChanged((path) => ideBridge.diagnosticsChanged(path));
+$("status-claude").addEventListener("click", () => terminalPanel.openClaude());
 
 const servePanel = new ServePanel({
   openFile: (path, line, col) => openFile(path, line, col),

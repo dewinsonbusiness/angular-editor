@@ -421,3 +421,63 @@ kbd {
 .status-button { cursor: pointer; padding: 0 6px; border-radius: 3px; }
 .status-button:hover { background: var(--bg-active); color: var(--fg-bright); }
 #status-autosave.on { color: #98c379; }
+/* ---------- panel con vistas + terminal ---------- */
+
+.panel-tabs { display: flex; align-items: center; gap: 2px; padding: 0 6px; border-bottom: 1px solid var(--border); }
+.panel-tab {
+  background: none;
+  color: var(--fg-dim);
+  border-radius: 0;
+  border-bottom: 2px solid transparent;
+  padding: 5px 10px 4px;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: .04em;
+}
+.panel-tab:hover { background: none; color: var(--fg); }
+.panel-tab.active { color: var(--fg-bright); border-bottom-color: var(--accent); }
+.panel-tabs .spacer { flex: 1; }
+.panel-tabs button.icon { background: none; color: var(--fg-dim); font-size: 15px; padding: 0 6px; }
+.panel-tabs button.icon:hover { color: var(--fg-bright); background: var(--bg-active); }
+.panel-view { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+
+#term-sessions { display: flex; gap: 4px; flex: 1; min-width: 0; overflow-x: auto; }
+.term-chip::before { color: #98c379 !important; }
+.term-chip.exited::before { color: var(--fg-dim) !important; }
+#term-host { flex: 1; min-height: 0; position: relative; background: #21252b; }
+.term-view { position: absolute; inset: 4px 0 0 8px; }
+.term-view .xterm-viewport { scrollbar-width: thin; }
+#term-claude { background: #c3002f33; color: #ff9db0; }
+#term-claude:hover { background: var(--accent); color: #fff; }
+/* ---------- Claude Code: revisión de cambios ---------- */
+
+#status-claude { color: var(--fg-dim); }
+#status-claude.on { color: #ff9db0; }
+
+#diff-review { padding: 3vh 2vw; align-items: stretch; z-index: 30; }
+.diff-box {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: 0 10px 40px #000a;
+  overflow: hidden;
+}
+.diff-header { display: flex; align-items: center; gap: 10px; padding: 8px 12px; background: var(--bg-side); border-bottom: 1px solid var(--border); }
+.diff-badge { background: #c3002f33; color: #ff9db0; border-radius: 3px; padding: 1px 8px; font-size: 12px; font-weight: 600; }
+#diff-title { color: var(--fg-bright); font: 13px var(--font-code); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#diff-queue { color: var(--fg-dim); font-size: 12px; }
+.diff-header .spacer { flex: 1; }
+.diff-header button { padding: 4px 14px; }
+.diff-header button.secondary { background: var(--bg-active); }
+.diff-header button.secondary:hover { background: #be5046; }
+#diff-accept { background: #2f7d32; }
+#diff-accept:hover { background: #3c9a40; }
+.diff-labels { display: grid; grid-template-columns: 1fr 1fr; padding: 3px 12px; font-size: 11px; color: var(--fg-dim); text-transform: uppercase; letter-spacing: .04em; border-bottom: 1px solid var(--border); }
+#diff-body { flex: 1; min-height: 0; overflow: auto; user-select: text; }
+#diff-body .cm-mergeView { height: 100%; }
+#diff-body .cm-mergeViewEditors { min-height: 100%; }

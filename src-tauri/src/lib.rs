@@ -1,5 +1,7 @@
 mod fsops;
+mod ide;
 mod lsp;
+mod pty;
 mod serve;
 
 use ignore::WalkBuilder;
@@ -133,6 +135,12 @@ pub fn run() {
         .manage(lsp::Servers::default())
         .manage(fsops::Watcher::default())
         .manage(serve::Serves::default())
+        .manage(pty::Ptys::default())
+        .manage(ide::Ide::default())
+        .setup(|app| {
+            ide::start(app.handle().clone());
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
             list_dir,
             read_file,
@@ -156,7 +164,15 @@ pub fn run() {
             serve::serve_start,
             serve::serve_stop,
             serve::serve_stop_all,
-            serve::open_url
+            serve::open_url,
+            pty::pty_spawn,
+            pty::pty_write,
+            pty::pty_resize,
+            pty::pty_kill,
+            pty::pty_kill_all,
+            ide::ide_attach,
+            ide::ide_send,
+            ide::ide_set_workspace
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
@@ -165,6 +181,8 @@ pub fn run() {
             if let tauri::RunEvent::Exit = event {
                 app.state::<lsp::Servers>().kill_all();
                 app.state::<serve::Serves>().stop_all();
+                app.state::<pty::Ptys>().kill_all();
+                app.state::<ide::Ide>().remove_lock();
             }
         });
 }
