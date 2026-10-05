@@ -1,0 +1,75 @@
+/* ---------- iconos del árbol (sin imágenes: glifos y una máscara SVG para carpetas) ---------- */
+
+.ico {
+  display: inline-block;
+  width: 18px;
+  margin-right: 5px;
+  text-align: center;
+  font: 700 9px/1 var(--font-code);
+  font-style: normal;
+  letter-spacing: -0.3px;
+  vertical-align: 1px;
+  color: #7f848e;
+}
+
+.ico.folder {
+  width: 15px;
+  height: 12px;
+  margin-right: 6px;
+  vertical-align: -1px;
+  background-color: #90a4ae;
+  -webkit-mask: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 13'><path d='M1 2a1 1 0 0 1 1-1h4l1.5 1.5H14a1 1 0 0 1 1 1V11a1 1 0 0 1-1 1H2a1 1 0 0 1-1-1z'/></svg>") center / contain no-repeat;
+  mask: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 13'><path d='M1 2a1 1 0 0 1 1-1h4l1.5 1.5H14a1 1 0 0 1 1 1V11a1 1 0 0 1-1 1H2a1 1 0 0 1-1-1z'/></svg>") center / contain no-repeat;
+}
+.node.dir.open > .ico.folder {
+  -webkit-mask-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 13'><path d='M1 2a1 1 0 0 1 1-1h4l1.5 1.5H13a1 1 0 0 1 1 1V5H4.5L2.6 10.5H2a1 1 0 0 1-1-1zM4.8 6H16l-2.2 6H2.7z'/></svg>");
+  mask-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 13'><path d='M1 2a1 1 0 0 1 1-1h4l1.5 1.5H13a1 1 0 0 1 1 1V5H4.5L2.6 10.5H2a1 1 0 0 1-1-1zM4.8 6H16l-2.2 6H2.7z'/></svg>");
+}
+
+/* Carpetas habituales en proyectos Angular / Nx. */
+.f-src { background-color: #42a5f5; }
+.f-app { background-color: #f0506e; }
+.f-lib { background-color: #c678dd; }
+.f-assets { background-color: #e5c07b; }
+.f-env { background-color: #98c379; }
+.f-deps { background-color: #5c6370; }
+.f-config { background-color: #7f848e; }
+
+/* Lenguajes. */
+.i-ts, .i-tsconfig { color: #3b8eea; }
+.i-js { color: #e8d44d; }
+.i-html, .i-xml { color: #e8774e; }
+.i-scss { color: #cd6799; }
+.i-css { color: #42a5f5; }
+.i-json { color: #cbcb41; }
+.i-md, .i-readme { color: #519aba; }
+.i-yaml, .i-image { color: #a074c4; }
+.i-svg { color: #ffb13b; }
+.i-font { color: #e06c75; }
+.i-text, .i-config, .i-lock, .i-ng-config { color: #8a8f98; }
+.i-shell { color: #89e051; }
+.i-env { color: #e5c07b; }
+
+/* Angular. */
+.i-ng, .i-angular { color: #f0506e; }
+.i-ng-service { color: #c678dd; }
+.i-ng-guard { color: #e5c07b; }
+.i-ng-pipe { color: #56b6c2; }
+.i-ng-routes { color: #98c379; font-size: 12px; }
+.i-ng-store { color: #b48ead; font-size: 11px; }
+.i-spec { color: #7f848e; font-size: 11px; }
+
+/* Herramientas. */
+.i-nx { color: #88a8d8; }
+.i-npm { color: #e06c75; }
+.i-pnpm { color: #f69220; }
+.i-git { color: #f14e32; font-size: 12px; }
+.i-node { color: #8cc84b; font-size: 11px; }
+.i-docker { color: #2496ed; }
+.i-eslint { color: #8080f2; }
+.i-prettier { color: #c596c7; }
+
+/* Pestañas de dependencias (node_modules): solo lectura y en vista previa. */
+.tab.library .tab-name { color: var(--fg-dim); }
+.tab.library .tab-name::before { content: "🔒︎ "; font-size: 10px; filter: grayscale(1); opacity: .7; }
+.tab.preview .tab-name { font-style: italic; }

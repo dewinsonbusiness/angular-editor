@@ -93,9 +93,6 @@ button:hover { background: var(--accent); }
 .node.dir::before { content: "▸"; display: inline-block; width: 14px; color: var(--fg-dim); }
 .node.dir.open::before { content: "▾"; }
 .node.file::before { content: ""; display: inline-block; width: 14px; }
-.node.file[data-path$=".ts"] { color: #61afef; }
-.node.file[data-path$=".html"] { color: #e5c07b; }
-.node.file[data-path$=".scss"], .node.file[data-path$=".css"] { color: #c678dd; }
 .node.file[data-path$=".spec.ts"] { color: var(--fg-dim); }
 
 /* ---------- pestañas + editor ---------- */

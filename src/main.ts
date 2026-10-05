@@ -13,13 +13,24 @@ import { TerminalPanel } from "./terminal";
 import { setupPanel, isPanelOpen, showPanel, hidePanel } from "./panel";
 import { IdeBridge } from "./ide";
 import { GitManager, gitGutter, type QuickPickItem } from "./git";
+import { fileIcon, folderKind } from "./icons";
+import "./icons.css";
 import {
   settings, loadSettings, onSettingsChange, openSettings, setupSettingsUi, describeAutoSave,
 } from "./settings";
 
 interface Entry { name: string; path: string; is_dir: boolean }
 interface Hit { path: string; line: number; col: number; text: string }
-interface Tab { path: string; state: EditorState; saved: Text; el: HTMLElement }
+interface Tab {
+  path: string;
+  state: EditorState;
+  saved: Text;
+  el: HTMLElement;
+  /** Archivo de node_modules o de fuera del proyecto: solo lectura y no se guarda en la sesión. */
+  library?: boolean;
+  /** Pestaña de vista previa: la siguiente librería que se abra la reemplaza (doble clic la fija). */
+  preview?: boolean;
+}
 
 const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
 const appWindow = getCurrentWindow();
@@ -87,12 +98,16 @@ const lspServers = new LspManager({
   status,
 });
 
-function makeState(path: string, doc: string): EditorState {
+/** Código de dependencias (node_modules) o de fuera del proyecto: se mira, no se edita. */
+const isLibraryPath = (path: string) => /[\\/]node_modules[\\/]/i.test(path) || (!!root && !inRoot(path));
+
+function makeState(path: string, doc: string, readOnly = false): EditorState {
   // Se conserva el final de línea original (CRLF en muchos proyectos de Windows).
   const eol = doc.includes("\r\n") ? "\r\n" : "\n";
   return EditorState.create({
     doc,
     extensions: [
+      readOnly ? EditorState.readOnly.of(true) : [],
       basicSetup,
       keymap.of([indentWithTab]),
       EditorState.tabSize.of(2),
@@ -166,7 +181,7 @@ function activate(tab: Tab) {
   for (const t of tabs) t.el.classList.toggle("active", t === tab);
   tab.el.scrollIntoView({ block: "nearest", inline: "nearest" });
   showWelcome(false);
-  $("status-lang").textContent = langFor(tab.path).name;
+  $("status-lang").textContent = langFor(tab.path).name + (tab.library ? " · solo lectura" : "");
   revealInTree(tab.path);
   updatePos();
   updateTitle();
@@ -174,6 +189,15 @@ function activate(tab: Tab) {
   saveSession();
   ideBridge.selectionChanged();
   gitMgr.updateGutter();
+}
+
+function labelTab(t: Tab) {
+  t.el.querySelector(".tab-name")!.textContent = baseName(t.path);
+  t.el.classList.toggle("library", !!t.library);
+  t.el.classList.toggle("preview", !!t.preview);
+  t.el.title = t.library
+    ? `${t.path}\nSolo lectura (dependencia)${t.preview ? " · vista previa: doble clic para fijarla" : ""}`
+    : t.path;
 }
 
 async function openFile(path: string, line?: number, col = 0) {
@@ -186,23 +210,38 @@ async function openFile(path: string, line?: number, col = 0) {
       status(`No se pudo abrir ${baseName(path)}: ${e}`);
       return;
     }
-    const state = makeState(path, text);
-    const el = document.createElement("div");
-    el.className = "tab";
-    el.title = path;
-    el.innerHTML = `<span class="tab-name"></span><span class="tab-close" title="Cerrar (Ctrl+W)">×</span>`;
-    el.querySelector(".tab-name")!.textContent = baseName(path);
-    const t: Tab = { path, state, saved: state.doc, el };
-    el.addEventListener("mousedown", (ev) => {
-      if (ev.button === 1) { ev.preventDefault(); closeTab(t); }
-    });
-    el.addEventListener("click", (ev) => {
-      if ((ev.target as HTMLElement).classList.contains("tab-close")) closeTab(t);
-      else activate(t);
-    });
-    $("tabs").appendChild(el);
-    tabs.push(t);
-    tab = t;
+    const library = isLibraryPath(path);
+    const preview = library ? tabs.find((t) => t.preview) : undefined;
+    if (preview) {
+      // Reutilizar la pestaña de vista previa en lugar de acumular pestañas de node_modules.
+      lspServers.release(preview.path);
+      preview.path = path;
+      preview.state = makeState(path, text, true);
+      preview.saved = preview.state.doc;
+      labelTab(preview);
+      if (preview === active) active = null; // fuerza a activate() a cargar el nuevo documento
+      tab = preview;
+    } else {
+      const state = makeState(path, text, library);
+      const el = document.createElement("div");
+      el.className = "tab";
+      el.innerHTML = `<span class="tab-name"></span><span class="tab-close" title="Cerrar (Ctrl+W)">×</span>`;
+      const t: Tab = { path, state, saved: state.doc, el, library, preview: library };
+      labelTab(t);
+      el.addEventListener("mousedown", (ev) => {
+        if (ev.button === 1) { ev.preventDefault(); closeTab(t); }
+      });
+      el.addEventListener("click", (ev) => {
+        if ((ev.target as HTMLElement).classList.contains("tab-close")) closeTab(t);
+        else activate(t);
+      });
+      el.addEventListener("dblclick", () => {
+        if (t.preview) { t.preview = false; labelTab(t); }
+      });
+      $("tabs").appendChild(el);
+      tabs.push(t);
+      tab = t;
+    }
   }
   activate(tab);
   if (line) {
@@ -213,6 +252,7 @@ async function openFile(path: string, line?: number, col = 0) {
 }
 
 async function saveTab(tab: Tab): Promise<boolean> {
+  if (tab.library) return false;
   const state = stateOf(tab);
   try {
     // sliceDoc usa el separador de línea del estado (preserva CRLF).
@@ -228,6 +268,7 @@ async function saveTab(tab: Tab): Promise<boolean> {
 }
 
 async function save() {
+  if (active?.library) return status("Es un archivo de dependencias (solo lectura): no se guarda");
   if (active && (await saveTab(active))) status(`Guardado ${baseName(active.path)}`);
 }
 
@@ -302,8 +343,8 @@ function saveSession() {
 function saveSessionNow() {
   if (!root || restoringSession) return;
   const session: Session = {
-    tabs: tabs.map((t) => ({ path: t.path, pos: stateOf(t).selection.main.head })),
-    active: active?.path ?? null,
+    tabs: tabs.filter((t) => !t.library).map((t) => ({ path: t.path, pos: stateOf(t).selection.main.head })),
+    active: active && !active.library ? active.path : null,
   };
   try { localStorage.setItem(sessionKey(root), JSON.stringify(session)); } catch {}
 }
@@ -316,6 +357,7 @@ async function restoreSession(r: string) {
   try {
     for (const { path, pos } of session.tabs) {
       if (root !== r) return; // el usuario abrió otro proyecto mientras tanto
+      if (isLibraryPath(path)) continue; // sesiones antiguas podían guardar archivos de node_modules
       const exists = await invoke<string>("read_file", { path }).then(() => true, () => false);
       if (!exists) continue;
       await openFile(path);
@@ -386,7 +428,15 @@ async function renderDir(container: HTMLElement, path: string, depth: number) {
     row.style.paddingLeft = indent(depth);
     row.dataset.path = e.path;
     row.dataset.dir = e.is_dir ? "1" : "";
-    row.textContent = e.name;
+    const ico = document.createElement("i");
+    if (e.is_dir) {
+      ico.className = `ico folder f-${folderKind(e.name)}`;
+    } else {
+      const fi = fileIcon(e.name);
+      ico.className = `ico i-${fi.kind}`;
+      ico.textContent = fi.glyph;
+    }
+    row.append(ico, e.name);
     row.setAttribute("role", "treeitem");
     frag.appendChild(row);
 
@@ -471,6 +521,12 @@ function markTreeActive(path: string | null) {
 
 /** Como en VS Code: expande las carpetas hasta el archivo, lo marca y lo hace visible. */
 async function revealInTree(path: string) {
+  // No desplegar node_modules en el árbol solo por haber ido a una definición.
+  if (isLibraryPath(path)) {
+    markTreeActive(null);
+    selectTreeRow(null);
+    return;
+  }
   if (inRoot(path)) {
     const parts = path.slice(root!.length + 1).split(sep);
     let dir = root!;
