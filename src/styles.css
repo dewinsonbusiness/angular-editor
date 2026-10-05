@@ -371,3 +371,13 @@ kbd {
 #status-serve.starting, #status-serve.building { color: #61afef; }
 #status-serve.ready { color: #98c379; }
 #status-serve.error { color: #e06c75; }
+.serve-chip { display: inline-flex; align-items: center; gap: 4px; padding-right: 3px; }
+.serve-chip .chip-close {
+  width: 16px; height: 16px;
+  display: inline-grid; place-items: center;
+  border-radius: 3px;
+  color: var(--fg-dim);
+  font-size: 13px;
+  line-height: 1;
+}
+.serve-chip .chip-close:hover { background: var(--bg-active); color: var(--fg-bright); }

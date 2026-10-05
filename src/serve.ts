@@ -48,6 +48,7 @@ export class ServePanel {
 
     $("serve-start").addEventListener("click", () => this.start());
     $("serve-stop").addEventListener("click", () => this.selected && this.stop(this.selected));
+    $("serve-restart").addEventListener("click", () => this.selected && this.restart(this.selected));
     $("serve-open").addEventListener("click", () => this.openInBrowser());
     $("serve-clear").addEventListener("click", () => this.selected?.out.replaceChildren());
     $("panel-close").addEventListener("click", () => this.toggle(false));
@@ -123,10 +124,18 @@ export class ServePanel {
       $("serve-output").appendChild(out);
       const chip = document.createElement("button");
       chip.className = "serve-chip";
+      chip.innerHTML = `<span class="chip-label"></span><span class="chip-close" title="Detener y cerrar">×</span>`;
       $("serve-sessions").appendChild(chip);
       s = { id: "", project, state: "starting", url: null, out, chip, failedThisBuild: false };
       const session = s;
-      chip.addEventListener("click", () => this.select(session));
+      chip.addEventListener("click", (e) => {
+        if ((e.target as HTMLElement).classList.contains("chip-close")) this.close(session);
+        else this.select(session);
+      });
+      // Clic central cierra, como en las pestañas.
+      chip.addEventListener("mousedown", (e) => {
+        if (e.button === 1) { e.preventDefault(); this.close(session); }
+      });
       this.sessions.push(s);
     }
     const session = s;
@@ -158,11 +167,35 @@ export class ServePanel {
     }
   }
 
-  stop(s: Session) {
+  /** Detiene el proceso y espera a que muera todo su árbol (así el puerto queda libre). */
+  async stop(s: Session) {
     if (s.state === "stopped") return;
-    invoke("serve_stop", { id: s.id });
-    this.append(s, "— detenido —", "cmd");
+    const id = s.id;
     s.state = "stopped";
+    s.id = ""; // ignorar lo que aún llegue de esta ejecución
+    this.append(s, "— detenido —", "cmd");
+    this.render();
+    await invoke("serve_stop", { id }).catch(() => {});
+  }
+
+  async restart(s: Session) {
+    await this.stop(s);
+    this.append(s, "— reiniciando —", "cmd");
+    await this.start(s.project);
+  }
+
+  /** Detiene la app (si corre) y quita su botón y su salida del panel. */
+  async close(s: Session) {
+    await this.stop(s);
+    s.chip.remove();
+    s.out.remove();
+    const i = this.sessions.indexOf(s);
+    this.sessions.splice(i, 1);
+    if (this.selected === s) {
+      this.selected = null;
+      const next = this.sessions[i] ?? this.sessions[i - 1];
+      if (next) this.select(next);
+    }
     this.render();
   }
 
@@ -260,12 +293,13 @@ export class ServePanel {
   private render() {
     for (const s of this.sessions) {
       s.chip.className = `serve-chip ${s.state}` + (s === this.selected ? " selected" : "");
-      s.chip.textContent = s.project;
+      s.chip.querySelector(".chip-label")!.textContent = s.project;
       s.chip.title = `${s.project}: ${STATE_LABEL[s.state]}${s.url ? ` — ${s.url}` : ""}`;
     }
     const sel = this.selected;
     const running = !!sel && sel.state !== "stopped";
     $<HTMLButtonElement>("serve-stop").disabled = !running;
+    $<HTMLButtonElement>("serve-restart").disabled = !sel;
     $<HTMLButtonElement>("serve-open").disabled = !sel?.url || !running;
     $<HTMLButtonElement>("serve-start").disabled = !this.workspace || !$<HTMLSelectElement>("serve-project").value;
     $("serve-url").textContent = running && sel?.url ? sel.url : "";
