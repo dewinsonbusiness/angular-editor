@@ -235,6 +235,11 @@ pub struct FsChange {
 }
 
 fn skipped(path: &Path) -> bool {
+    // De .git solo interesan HEAD (cambio de rama) e index (stage/commit), para refrescar Git.
+    let parent_is_git = path.parent().and_then(|p| p.file_name()).is_some_and(|n| n == ".git");
+    if parent_is_git && path.file_name().is_some_and(|n| n == "HEAD" || n == "index") {
+        return false;
+    }
     path.components()
         .any(|c| SKIP_DIRS.iter().any(|s| c.as_os_str() == *s))
 }

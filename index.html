@@ -15,7 +15,23 @@
           <button id="open-folder" title="Abrir carpeta (Ctrl+O)">Abrir</button>
           <button id="open-settings" class="icon" title="Configuración (Ctrl+,)">⚙</button>
         </div>
+        <div class="side-tabs" role="tablist">
+          <button class="side-tab active" data-side="files" title="Archivos (Ctrl+Shift+E)">Archivos</button>
+          <button class="side-tab" data-side="git" title="Control de código fuente (Ctrl+Shift+G)">Git <span id="git-count" class="badge"></span></button>
+        </div>
         <div id="tree" role="tree" tabindex="0"></div>
+        <div id="scm" hidden>
+          <div class="scm-commit">
+            <textarea id="scm-message" rows="3" placeholder="Mensaje del commit (Ctrl+Enter)" spellcheck="false"></textarea>
+            <div class="scm-buttons">
+              <button id="scm-commit" title="Hacer commit de lo preparado (Ctrl+Enter)">✓ Commit</button>
+              <button id="scm-pull" class="secondary" title="Pull: traer los cambios del remoto">↓ Pull</button>
+              <button id="scm-push" class="secondary" title="Push: subir tus commits">↑ Push</button>
+              <button id="scm-refresh" class="icon" title="Actualizar">⟳</button>
+            </div>
+          </div>
+          <div id="scm-lists"></div>
+        </div>
       </aside>
       <main id="main">
         <div id="tabs" role="tablist"></div>
@@ -65,6 +81,7 @@
     </div>
     <footer id="status">
       <span id="status-msg"></span>
+      <span id="status-git" class="status-button" hidden></span>
       <span id="status-claude" class="status-button" title="Abrir Claude Code en la terminal">✳ Claude</span>
       <span id="status-autosave" class="status-button" title="Cambiar el modo de guardado"></span>
       <span id="status-serve" title="Panel de serve (Ctrl+J)"></span>
@@ -76,6 +93,13 @@
       <div class="overlay-box">
         <input id="palette-input" placeholder="Buscar archivo por nombre…" spellcheck="false" />
         <ul id="palette-list" role="listbox"></ul>
+      </div>
+    </div>
+
+    <div id="quickpick" class="overlay" hidden>
+      <div class="overlay-box">
+        <input id="quickpick-input" spellcheck="false" />
+        <ul id="quickpick-list" role="listbox"></ul>
       </div>
     </div>
 

@@ -1,4 +1,5 @@
 mod fsops;
+mod git;
 mod ide;
 mod lsp;
 mod pty;
@@ -172,7 +173,12 @@ pub fn run() {
             pty::pty_kill_all,
             ide::ide_attach,
             ide::ide_send,
-            ide::ide_set_workspace
+            ide::ide_set_workspace,
+            git::git_status,
+            git::git_show,
+            git::git_branches,
+            git::git_run,
+            git::git_commit
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

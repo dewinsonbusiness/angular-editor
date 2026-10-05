@@ -12,6 +12,7 @@ import { ServePanel } from "./serve";
 import { TerminalPanel } from "./terminal";
 import { setupPanel, isPanelOpen, showPanel, hidePanel } from "./panel";
 import { IdeBridge } from "./ide";
+import { GitManager, gitGutter, type QuickPickItem } from "./git";
 import {
   settings, loadSettings, onSettingsChange, openSettings, setupSettingsUi, describeAutoSave,
 } from "./settings";
@@ -98,6 +99,7 @@ function makeState(path: string, doc: string): EditorState {
       EditorState.lineSeparator.of(eol),
       oneDark,
       langFor(path).ext(),
+      gitGutter,
       lspServers.extensionFor(path),
       // Ctrl+clic = ir a definición / abrir ruta; los cursores múltiples van con Alt+clic.
       EditorView.clickAddsSelectionRange.of((e) => e.altKey),
@@ -118,6 +120,7 @@ function makeState(path: string, doc: string): EditorState {
           if (active) scheduleAutoSave(active);
         }
         if (u.selectionSet || u.docChanged) ideBridge.selectionChanged();
+        if (u.docChanged) gitMgr.scheduleGutter();
         if (u.docChanged || u.selectionSet) updatePos();
       }),
     ],
@@ -170,6 +173,7 @@ function activate(tab: Tab) {
   view.focus();
   saveSession();
   ideBridge.selectionChanged();
+  gitMgr.updateGutter();
 }
 
 async function openFile(path: string, line?: number, col = 0) {
@@ -409,6 +413,7 @@ async function renderDir(container: HTMLElement, path: string, depth: number) {
       if (cls) row.classList.add(cls);
       if (active && samePath(active.path, e.path)) row.classList.add("active");
     }
+    decorateRow(row);
   }
   container.replaceChildren(frag);
   await Promise.all(reopen.map((n) => n.setOpen(true)));
@@ -431,6 +436,30 @@ $("tree").addEventListener("click", (ev) => {
 function selectTreeRow(row: HTMLElement | null) {
   document.querySelector("#tree .node.selected")?.classList.remove("selected");
   row?.classList.add("selected");
+}
+
+// ---------- colores de Git en el árbol ----------
+
+const GIT_CLASSES = ["git-modified", "git-untracked", "git-added", "git-deleted", "git-renamed", "git-conflict", "git-dir-changed"];
+
+function decorateRow(row: HTMLElement) {
+  const path = row.dataset.path!;
+  row.classList.remove(...GIT_CLASSES);
+  delete row.dataset.git;
+  if (row.dataset.dir) {
+    if (gitMgr.dirChanged(path)) row.classList.add("git-dir-changed");
+    return;
+  }
+  const d = gitMgr.decorationFor(path);
+  if (d) {
+    row.classList.add(d.cls);
+    row.dataset.git = d.letter;
+  }
+}
+
+function decorateTree() {
+  fileNodes.forEach(decorateRow);
+  dirNodes.forEach((n) => { if (n.row) decorateRow(n.row); });
 }
 
 function markTreeActive(path: string | null) {
@@ -788,8 +817,10 @@ async function onFsChanges(changes: FsChange[]) {
   const forServers: { path: string; type: 1 | 2 | 3 }[] = [];
   const indexed = new Set(fileIndex.map((f) => f.toLowerCase()));
 
+  // Cualquier cambio en disco puede cambiar el estado de Git (incluidos .git/HEAD e index).
+  gitMgr.scheduleRefresh();
   for (const c of changes) {
-    if (!inRoot(c.path)) continue;
+    if (!inRoot(c.path) || /[\\/]\.git[\\/]/.test(c.path)) continue;
     const parent = parentOf(c.path);
     dirsToReload.set(parent.toLowerCase(), parent);
     const rel = relOf(c.path);
@@ -949,6 +980,7 @@ async function openFolder(path: string) {
   watchRoot(root);
   servePanel.loadTargets(root);
   ideBridge.setWorkspace(root);
+  gitMgr.refresh();
   await restoreSession(root);
   updateTitle();
   refreshIndex().then(() => status(`${fileIndex.length} archivos indexados`));
@@ -1051,6 +1083,26 @@ function fuzzyScore(q: string, s: string): number {
 }
 
 const palette = new Picker($("palette"), $<HTMLInputElement>("palette-input"), $("palette-list"));
+
+// Selector genérico (ramas de Git, etc.): filtra por texto y opcionalmente ofrece crear lo escrito.
+const quickPicker = new Picker($("quickpick"), $<HTMLInputElement>("quickpick-input"), $("quickpick-list"));
+let quickPickState: { items: QuickPickItem[]; create?: (text: string) => QuickPickItem | null } = { items: [] };
+
+function renderQuickPick() {
+  const q = quickPicker.input.value.trim().toLowerCase();
+  const items = quickPickState.items.filter((i) => !q || i.label.toLowerCase().includes(q));
+  const extra = quickPickState.create?.(quickPicker.input.value);
+  quickPicker.setItems(extra ? [...items, extra] : items);
+}
+quickPicker.input.addEventListener("input", renderQuickPick);
+
+function quickPick(placeholder: string, items: QuickPickItem[], create?: (text: string) => QuickPickItem | null) {
+  quickPickState = { items, create };
+  quickPicker.input.value = "";
+  quickPicker.input.placeholder = placeholder;
+  renderQuickPick();
+  quickPicker.show();
+}
 
 function renderPalette() {
   const q = palette.input.value.toLowerCase().replace(/\s+/g, "");
@@ -1194,6 +1246,8 @@ window.addEventListener("keydown", (e) => {
   else if (k === "f12" && !e.shiftKey && !ctrl && active) goToDefinition();
   else if (ctrl && !e.shiftKey && k === "j") { if (isPanelOpen()) hidePanel(); else showPanel(); }
   else if (ctrl && !e.shiftKey && k === ",") openSettings();
+  else if (ctrl && e.shiftKey && k === "g") showSide("git");
+  else if (ctrl && e.shiftKey && k === "e") showSide("files");
   else handled = false;
   if (handled) { e.preventDefault(); e.stopPropagation(); }
 }, { capture: true });
@@ -1218,6 +1272,39 @@ appWindow.onCloseRequested(async (e) => {
 window.addEventListener("beforeunload", () => {
   saveSessionNow();
   lspServers.stop();
+});
+
+// ---------- Git ----------
+
+const gitMgr = new GitManager({
+  view,
+  root: () => root,
+  activePath: () => active?.path ?? null,
+  openFile: (path) => openFile(path),
+  decorateTree,
+  quickPick,
+  trash: async (path) => {
+    await invoke("delete_path", { path });
+    const t = findTab(path);
+    if (t) await closeTab(t, true);
+  },
+  status,
+});
+
+// Volver al editor desde otra app (terminal externa, VS Code…) puede traer cambios de Git.
+window.addEventListener("focus", () => gitMgr.scheduleRefresh(100));
+
+function showSide(side: "files" | "git") {
+  document.querySelectorAll<HTMLElement>(".side-tab").forEach((t) => t.classList.toggle("active", t.dataset.side === side));
+  $("tree").hidden = side !== "files";
+  $("scm").hidden = side !== "git";
+  if (side === "git") {
+    gitMgr.refresh();
+    $("scm-message").focus();
+  }
+}
+document.querySelectorAll<HTMLElement>(".side-tab").forEach((t) => {
+  t.addEventListener("click", () => showSide(t.dataset.side as "files" | "git"));
 });
 
 // En la versión instalada no hay consola: los errores no capturados se muestran abajo.
