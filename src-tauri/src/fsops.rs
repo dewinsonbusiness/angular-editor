@@ -192,6 +192,36 @@ pub async fn ng_generate(cwd: String, schematic: String, name: String) -> Result
     Ok(GenerateResult { workspace: root.to_string_lossy().into_owned(), tool, command, output })
 }
 
+// ---------- configuración del editor ----------
+
+fn settings_path(app: &tauri::AppHandle) -> Result<PathBuf, String> {
+    use tauri::Manager;
+    let dir = app.path().app_config_dir().map_err(|e| e.to_string())?;
+    Ok(dunce::simplified(&dir).join("settings.json"))
+}
+
+/// Contenido de settings.json, o "{}" si todavía no existe.
+#[tauri::command]
+pub async fn read_settings(app: tauri::AppHandle) -> Result<String, String> {
+    match fs::read_to_string(settings_path(&app)?) {
+        Ok(s) => Ok(s),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok("{}".into()),
+        Err(e) => Err(e.to_string()),
+    }
+}
+
+#[tauri::command]
+pub async fn write_settings(app: tauri::AppHandle, contents: String) -> Result<(), String> {
+    let path = settings_path(&app)?;
+    if let Some(dir) = path.parent() {
+        fs::create_dir_all(dir).map_err(|e| e.to_string())?;
+    }
+    // Escritura atómica: primero a un temporal y luego se reemplaza.
+    let tmp = path.with_extension("json.tmp");
+    fs::write(&tmp, contents).map_err(|e| e.to_string())?;
+    fs::rename(&tmp, &path).map_err(|e| e.to_string())
+}
+
 // ---------- vigilancia ----------
 
 #[derive(Default)]

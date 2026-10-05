@@ -148,6 +148,8 @@ pub fn run() {
             fsops::delete_path,
             fsops::reveal_in_explorer,
             fsops::ng_generate,
+            fsops::read_settings,
+            fsops::write_settings,
             fsops::watch_root,
             serve::serve_targets,
             serve::serve_targets_nx,

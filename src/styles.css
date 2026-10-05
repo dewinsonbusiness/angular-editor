@@ -381,3 +381,34 @@ kbd {
   line-height: 1;
 }
 .serve-chip .chip-close:hover { background: var(--bg-active); color: var(--fg-bright); }
+/* ---------- configuración ---------- */
+
+.sidebar-header button.icon { background: none; color: var(--fg-dim); font-size: 15px; padding: 0 4px; }
+.sidebar-header button.icon:hover { color: var(--fg-bright); background: var(--bg-active); }
+
+.settings-box { width: min(560px, 92vw); }
+.settings-header { display: flex; align-items: center; justify-content: space-between; padding: 10px 14px; border-bottom: 1px solid var(--border); }
+.settings-header h2 { margin: 0; font-size: 14px; font-weight: 600; color: var(--fg-bright); }
+.settings-header button.icon { background: none; color: var(--fg-dim); font-size: 18px; padding: 0 6px; }
+.settings-header button.icon:hover { color: var(--fg-bright); background: var(--bg-active); }
+#settings-body { padding: 6px 16px 16px; overflow-y: auto; user-select: text; }
+#settings-body h3 { margin: 12px 0 2px; font-size: 13px; color: var(--fg-bright); }
+.setting-help { margin: 0 0 10px; color: var(--fg-dim); font-size: 12px; }
+.radio-group { display: flex; flex-direction: column; gap: 2px; }
+.radio { display: flex; gap: 10px; align-items: flex-start; padding: 6px 8px; border-radius: 4px; cursor: pointer; }
+.radio:hover { background: var(--bg-hover); }
+.radio input { margin-top: 3px; accent-color: #528bff; }
+.radio strong { display: block; font-weight: 500; color: var(--fg-bright); }
+.radio small { display: block; color: var(--fg-dim); font-size: 12px; }
+.setting-row { display: flex; align-items: center; gap: 8px; margin: 10px 0 0 34px; }
+.setting-row input {
+  width: 90px; padding: 3px 6px;
+  background: var(--bg); color: var(--fg-bright);
+  border: 1px solid var(--bg-active); border-radius: 3px;
+  font: 13px var(--font-code);
+}
+.setting-row .unit { color: var(--fg-dim); }
+
+.status-button { cursor: pointer; padding: 0 6px; border-radius: 3px; }
+.status-button:hover { background: var(--bg-active); color: var(--fg-bright); }
+#status-autosave.on { color: #98c379; }

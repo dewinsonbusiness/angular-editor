@@ -13,6 +13,7 @@
         <div class="sidebar-header">
           <span id="project-name">Sin proyecto</span>
           <button id="open-folder" title="Abrir carpeta (Ctrl+O)">Abrir</button>
+          <button id="open-settings" class="icon" title="Configuración (Ctrl+,)">⚙</button>
         </div>
         <div id="tree" role="tree" tabindex="0"></div>
       </aside>
@@ -27,7 +28,7 @@
           <p><kbd>Alt</kbd>+<kbd>O</kbd> alternar .ts / .html / .scss</p>
           <p><kbd>F12</kbd> / <kbd>Ctrl</kbd>+clic ir a definición · <kbd>Shift</kbd>+<kbd>F12</kbd> referencias</p>
           <p><kbd>F2</kbd> renombrar · <kbd>Shift</kbd>+<kbd>Alt</kbd>+<kbd>F</kbd> formatear · <kbd>Ctrl</kbd>+<kbd>Espacio</kbd> autocompletar</p>
-          <p><kbd>Ctrl</kbd>+<kbd>S</kbd> guardar · <kbd>Ctrl</kbd>+<kbd>K</kbd> <kbd>S</kbd> guardar todo · <kbd>Ctrl</kbd>+<kbd>W</kbd> cerrar pestaña · <kbd>Ctrl</kbd>+<kbd>J</kbd> panel de serve</p>
+          <p><kbd>Ctrl</kbd>+<kbd>S</kbd> guardar · <kbd>Ctrl</kbd>+<kbd>K</kbd> <kbd>S</kbd> guardar todo · <kbd>Ctrl</kbd>+<kbd>W</kbd> cerrar pestaña · <kbd>Ctrl</kbd>+<kbd>J</kbd> panel de serve · <kbd>Ctrl</kbd>+<kbd>,</kbd> configuración</p>
         </div>
         <section id="panel" hidden>
           <div id="panel-resizer"></div>
@@ -50,6 +51,7 @@
     </div>
     <footer id="status">
       <span id="status-msg"></span>
+      <span id="status-autosave" class="status-button" title="Cambiar el modo de guardado"></span>
       <span id="status-serve" title="Panel de serve (Ctrl+J)"></span>
       <span id="status-pos"></span>
       <span id="status-lang"></span>
@@ -59,6 +61,16 @@
       <div class="overlay-box">
         <input id="palette-input" placeholder="Buscar archivo por nombre…" spellcheck="false" />
         <ul id="palette-list" role="listbox"></ul>
+      </div>
+    </div>
+
+    <div id="settings" class="overlay" hidden>
+      <div class="overlay-box settings-box" role="dialog" aria-labelledby="settings-title">
+        <div class="settings-header">
+          <h2 id="settings-title">Configuración</h2>
+          <button id="settings-close" class="icon" title="Cerrar (Esc)">×</button>
+        </div>
+        <div id="settings-body"></div>
       </div>
     </div>
 

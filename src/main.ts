@@ -9,6 +9,9 @@ import { oneDark } from "@codemirror/theme-one-dark";
 import { langFor } from "./lang";
 import { LspManager, samePath, type Location } from "./lsp";
 import { ServePanel } from "./serve";
+import {
+  settings, loadSettings, onSettingsChange, openSettings, setupSettingsUi, describeAutoSave,
+} from "./settings";
 
 interface Entry { name: string; path: string; is_dir: boolean }
 interface Hit { path: string; line: number; col: number; text: string }
@@ -107,7 +110,10 @@ function makeState(path: string, doc: string): EditorState {
         },
       }),
       EditorView.updateListener.of((u) => {
-        if (u.docChanged) refreshDirty();
+        if (u.docChanged) {
+          refreshDirty();
+          if (active) scheduleAutoSave(active);
+        }
         if (u.docChanged || u.selectionSet) updatePos();
       }),
     ],
@@ -145,6 +151,7 @@ function activate(tab: Tab) {
   if (active && active !== tab) {
     lspServers.syncAll();
     active.state = view.state;
+    if (settings().autoSave === "onFocusChange") autoSaveTab(active);
   }
   active = tab;
   view.setState(tab.state);
@@ -222,6 +229,53 @@ async function saveAll() {
   status(`Guardados ${ok} de ${dirty.length} archivo(s)`);
 }
 
+// ---------- autoguardado ----------
+
+const autoSaveTimers = new Map<Tab, number>();
+
+/** No se autoguarda un archivo que cambió fuera del editor o que fue borrado: lo decide el usuario. */
+const canAutoSave = (t: Tab) =>
+  tabs.includes(t) && isDirty(t) && !t.el.classList.contains("conflict") && !t.el.classList.contains("deleted");
+
+function autoSaveTab(t: Tab) {
+  clearTimeout(autoSaveTimers.get(t));
+  autoSaveTimers.delete(t);
+  if (canAutoSave(t)) saveTab(t);
+}
+
+function autoSaveAll() {
+  tabs.forEach(autoSaveTab);
+}
+
+function scheduleAutoSave(t: Tab) {
+  if (settings().autoSave !== "afterDelay") return;
+  clearTimeout(autoSaveTimers.get(t));
+  autoSaveTimers.set(t, window.setTimeout(() => autoSaveTab(t), settings().autoSaveDelay));
+}
+
+// "Al cambiar de foco": salir del área de edición (paleta, búsqueda, árbol, otra app…).
+view.contentDOM.addEventListener("blur", () => {
+  if (settings().autoSave === "onFocusChange" && active) autoSaveTab(active);
+});
+
+// "Al cambiar de ventana" (y también "al cambiar de foco"): irse a otra aplicación.
+window.addEventListener("blur", () => {
+  const mode = settings().autoSave;
+  if (mode === "onWindowChange" || mode === "onFocusChange") autoSaveAll();
+});
+
+function renderAutoSaveStatus() {
+  const el = $("status-autosave");
+  el.textContent = describeAutoSave(settings());
+  el.classList.toggle("on", settings().autoSave !== "off");
+}
+
+onSettingsChange((s) => {
+  renderAutoSaveStatus();
+  if (s.autoSave === "afterDelay") tabs.filter(isDirty).forEach(scheduleAutoSave);
+  else { autoSaveTimers.forEach((id) => clearTimeout(id)); autoSaveTimers.clear(); }
+});
+
 // ---------- sesión: pestañas abiertas por proyecto ----------
 
 interface Session { tabs: { path: string; pos: number }[]; active: string | null }
@@ -267,6 +321,8 @@ async function restoreSession(r: string) {
 }
 
 async function closeTab(tab: Tab, force = false) {
+  // Con autoguardado activo, cerrar guarda en lugar de preguntar (como VS Code).
+  if (!force && settings().autoSave !== "off" && canAutoSave(tab)) await saveTab(tab);
   if (!force && isDirty(tab)) {
     const discard = await ask(`${baseName(tab.path)} tiene cambios sin guardar. ¿Cerrar de todos modos?`, {
       title: "Cambios sin guardar", kind: "warning", okLabel: "Descartar", cancelLabel: "Cancelar",
@@ -1125,14 +1181,19 @@ window.addEventListener("keydown", (e) => {
   else if (e.altKey && !ctrl && k === "o") cycleCompanion();
   else if (k === "f12" && !e.shiftKey && !ctrl && active) goToDefinition();
   else if (ctrl && !e.shiftKey && k === "j") servePanel.toggle();
+  else if (ctrl && !e.shiftKey && k === ",") openSettings();
   else handled = false;
   if (handled) { e.preventDefault(); e.stopPropagation(); }
 }, { capture: true });
 
 $("open-folder").addEventListener("click", pickFolder);
+$("open-settings").addEventListener("click", openSettings);
+$("status-autosave").addEventListener("click", openSettings);
+setupSettingsUi();
 
 appWindow.onCloseRequested(async (e) => {
   saveSessionNow();
+  if (settings().autoSave !== "off") await Promise.all(tabs.filter(canAutoSave).map(saveTab));
   const dirty = tabs.filter(isDirty);
   if (!dirty.length) return;
   const discard = await ask(
@@ -1155,6 +1216,8 @@ const servePanel = new ServePanel({
 });
 
 showWelcome(true);
+renderAutoSaveStatus();
+loadSettings();
 let lastRoot: string | null = null;
 try { lastRoot = localStorage.getItem(LAST_ROOT_KEY); } catch {}
 if (lastRoot) openFolder(lastRoot);
