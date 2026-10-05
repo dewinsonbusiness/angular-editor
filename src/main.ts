@@ -976,14 +976,39 @@ async function resolveRelative(spec: string): Promise<string | null> {
   return hit ? absOf(fileIndex.find((f) => f.toLowerCase() === hit.toLowerCase())!) : null;
 }
 
+let definitionPending = false;
+
 async function goToDefinition(pos = view.state.selection.main.head) {
   const spec = pathStringAt(pos);
   if (spec) {
     const target = await resolveRelative(spec);
     if (target) return openFile(target);
   }
-  if (!(await lspServers.goToDefinition(view, pos))) {
-    status(spec ? `No se encontró el archivo ${spec}` : "No se encontró la definición");
+  if (definitionPending) return status("Ya estoy buscando una definición, espera un momento…");
+  const word = view.state.wordAt(pos);
+  const what = word ? `«${view.state.sliceDoc(word.from, word.to)}»` : "";
+  definitionPending = true;
+  status(`Buscando definición de ${what}…`);
+  // Si tarda, explicar por qué (normalmente Angular cargando un proyecto grande).
+  const slow = window.setTimeout(() => {
+    status(lspServers.angularLoading
+      ? `Buscando ${what}… el servidor de Angular está cargando el proyecto (la primera vez tarda)`
+      : `Buscando ${what}… el servidor está ocupado, espera`);
+  }, 1500);
+  try {
+    const r = await lspServers.goToDefinition(view, pos);
+    const secs = r.ms >= 1000 ? ` (${(r.ms / 1000).toFixed(1)} s)` : "";
+    const name = r.server === "angular" ? "Angular" : r.server === "typescript" ? "TypeScript" : "";
+    switch (r.result) {
+      case "ok": status(r.ms >= 1500 ? `Definición encontrada${secs}` : ""); break;
+      case "none": status(spec ? `No se encontró el archivo ${spec}` : `No hay definición para ${what}${secs}`); break;
+      case "no-server": status("Este tipo de archivo no tiene servidor de lenguaje"); break;
+      case "timeout": status(`El servidor de ${name} no respondió a tiempo${secs}. Vuelve a intentarlo en unos segundos.`); break;
+      default: status(`No se pudo ir a la definición${secs}: ${r.detail ?? "error desconocido"}`);
+    }
+  } finally {
+    clearTimeout(slow);
+    definitionPending = false;
   }
 }
 

@@ -195,6 +195,7 @@ export class LspManager {
     this.diagnosticsListeners.add(listener);
   }
   private generation = 0;
+  private loadingAngular = false;
 
   constructor(private host: EditorHost) {}
 
@@ -221,13 +222,22 @@ export class LspManager {
         let ws!: TabWorkspace;
         const client = new LSPClient({
           rootUri: pathToUri(root),
-          timeout: kind === "angular" ? 20000 : 10000,
+          // En monorepos grandes (Nx) Angular puede tardar más de 20 s en cargar el proyecto la primera vez.
+          timeout: kind === "angular" ? 60000 : 20000,
           workspace: (c) => (ws = new TabWorkspace(c, this.host)),
           sanitizeHTML: (html) => html.replace(/<(script|iframe|object)[\s\S]*?<\/\1>/gi, ""),
           notificationHandlers: {
             "textDocument/publishDiagnostics": (c, p) => this.onDiagnostics(c, p),
-            "angular/projectLoadingStart": () => (this.host.status("Angular: cargando proyecto…"), true),
-            "angular/projectLoadingFinish": () => (this.host.status("Angular: listo"), true),
+            "angular/projectLoadingStart": () => {
+              this.loadingAngular = true;
+              this.host.status("Angular: cargando proyecto… (la primera vez puede tardar en monorepos grandes)");
+              return true;
+            },
+            "angular/projectLoadingFinish": () => {
+              this.loadingAngular = false;
+              this.host.status("Angular: listo");
+              return true;
+            },
           },
           unhandledNotification: () => {},
           extensions: [
@@ -407,30 +417,45 @@ export class LspManager {
     return byPath.size;
   }
 
-  /** Pide la definición al servidor y la abre. Devuelve false si no hay ninguna. */
-  async goToDefinition(view: EditorView, pos: number): Promise<boolean> {
+  /**
+   * Pide la definición al servidor y la abre.
+   * Devuelve "ok", o por qué no se pudo: sin servidor, sin resultado o tiempo agotado.
+   */
+  async goToDefinition(view: EditorView, pos: number): Promise<{ result: "ok" | "no-server" | "none" | "timeout" | "error"; ms: number; detail?: string; server?: string }> {
+    const started = performance.now();
+    const ms = () => Math.round(performance.now() - started);
     const plugin = LSPPlugin.get(view);
-    if (!plugin) return false;
+    if (!plugin) return { result: "no-server", ms: 0 };
+    const server = [...this.servers.values()].find((s) => s.client === plugin.client)?.kind ?? "";
     plugin.client.sync();
-    let result: lsp.Location | lsp.Location[] | lsp.LocationLink[] | null;
+    let response: lsp.Location | lsp.Location[] | lsp.LocationLink[] | null;
     try {
-      result = await plugin.client.request<lsp.DefinitionParams, typeof result>("textDocument/definition", {
+      response = await plugin.client.request<lsp.DefinitionParams, typeof response>("textDocument/definition", {
         textDocument: { uri: plugin.uri },
         position: plugin.toPosition(pos),
       });
-    } catch {
-      return false;
+    } catch (e: any) {
+      const msg = String(e?.message ?? e);
+      return { result: /timed out|timeout/i.test(msg) ? "timeout" : "error", ms: ms(), detail: msg, server };
     }
-    const first = Array.isArray(result) ? result[0] : result;
-    if (!first) return false;
+    const first = Array.isArray(response) ? response[0] : response;
+    if (!first) return { result: "none", ms: ms(), server };
     const [uri, start] = "targetUri" in first
       ? [first.targetUri, first.targetSelectionRange.start]
       : [first.uri, first.range.start];
-    await this.host.openPath(uriToPath(uri));
+    const path = uriToPath(uri);
+    await this.host.openPath(path);
+    const active = this.host.activePath();
+    if (!active || !samePath(active, path)) return { result: "error", ms: ms(), detail: `no se pudo abrir ${path}`, server };
     const target = this.host.view;
     const at = offsetAt(target.state.doc, start);
     target.dispatch({ selection: { anchor: at }, effects: EditorView.scrollIntoView(at, { y: "center" }) });
-    return true;
+    return { result: "ok", ms: ms(), server };
+  }
+
+  /** true mientras el servidor de Angular está cargando un proyecto (la primera vez tarda). */
+  get angularLoading() {
+    return this.loadingAngular;
   }
 
   private rename(view: EditorView): boolean {
