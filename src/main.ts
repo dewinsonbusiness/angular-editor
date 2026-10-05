@@ -1220,6 +1220,13 @@ window.addEventListener("beforeunload", () => {
   lspServers.stop();
 });
 
+// En la versión instalada no hay consola: los errores no capturados se muestran abajo.
+window.addEventListener("error", (e) => status(`Error: ${e.message}`));
+window.addEventListener("unhandledrejection", (e) => {
+  const r = e.reason;
+  status(`Error: ${r?.message ?? r}`);
+});
+
 // ---------- arranque ----------
 
 setupPanel();

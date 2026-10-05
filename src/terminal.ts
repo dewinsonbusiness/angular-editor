@@ -59,6 +59,7 @@ export class TerminalPanel {
   private sessions: Session[] = [];
   private active: Session | null = null;
   private counter = 0;
+  private creating = false;
 
   constructor(private host: TerminalHost) {
     // Terminales de una carga anterior de la interfaz.
@@ -84,7 +85,8 @@ export class TerminalPanel {
   }
 
   private onShown() {
-    if (!this.sessions.length) this.create();
+    // `creating` evita un bucle: create() muestra el panel y eso vuelve a llamar aquí.
+    if (!this.sessions.length) { if (!this.creating) this.create(); }
     else {
       this.fitActive();
       this.active?.term.focus();
@@ -104,7 +106,19 @@ export class TerminalPanel {
   async create(opts: { title?: string; args?: string[] } = {}) {
     const cwd = this.host.cwd();
     if (!cwd) return this.host.status("Abre un proyecto para usar la terminal");
-    showPanel("terminal");
+    this.creating = true;
+    try {
+      showPanel("terminal");
+      await this.createSession(cwd, opts);
+    } catch (e) {
+      this.host.status(`No se pudo abrir la terminal: ${e}`);
+      console.error(e);
+    } finally {
+      this.creating = false;
+    }
+  }
+
+  private async createSession(cwd: string, opts: { title?: string; args?: string[] }) {
     const { Terminal, FitAddon, WebLinksAddon } = await loadXterm();
 
     const id = `term-${Date.now()}-${++this.counter}`;
