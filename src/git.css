@@ -97,4 +97,15 @@
 .scm-btn:hover { background: var(--bg-active); color: var(--fg-bright); }
 
 #status-git { color: var(--fg); }
+
+/* Autor de la línea actual (git blame en línea). */
+.cm-blame {
+  margin-left: 3em;
+  color: #6b7280;
+  font-style: italic;
+  font-size: 0.9em;
+  white-space: pre;
+  cursor: default;
+  user-select: none;
+}
 .diff-badge.git { background: #4d78cc33; color: #8fb3ff; }

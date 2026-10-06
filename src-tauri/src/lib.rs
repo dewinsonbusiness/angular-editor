@@ -176,6 +176,7 @@ pub fn run() {
             ide::ide_set_workspace,
             git::git_status,
             git::git_show,
+            git::git_blame,
             git::git_branches,
             git::git_run,
             git::git_commit

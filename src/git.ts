@@ -120,6 +120,21 @@ export class GitManager {
     return path.slice(root.length + 1).split("\\").join("/");
   }
 
+  private refreshListeners = new Set<() => void>();
+
+  /** Avisar cuando cambia el estado del repositorio (commit, cambio de rama, etc.). */
+  onRefresh(listener: () => void) {
+    this.refreshListeners.add(listener);
+  }
+
+  /** Raíz del repositorio y ruta relativa de un archivo con seguimiento, o null. */
+  gitLocation(path: string): { root: string; rel: string } | null {
+    const rel = this.rel(path);
+    if (!rel || !this.repo) return null;
+    if (this.byPath.get(path.toLowerCase())?.index === "?") return null; // sin seguimiento: no hay historia
+    return { root: this.repo.root, rel };
+  }
+
   decorationFor(path: string): Decoration | null {
     const f = this.byPath.get(path.toLowerCase());
     return f ? describe(f) : null;
@@ -163,6 +178,7 @@ export class GitManager {
     this.renderScm();
     this.host.decorateTree();
     this.updateGutter();
+    this.refreshListeners.forEach((l) => l());
   }
 
   // ---------- barra de estado y ramas ----------

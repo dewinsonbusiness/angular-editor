@@ -13,6 +13,7 @@ import { TerminalPanel } from "./terminal";
 import { setupPanel, isPanelOpen, showPanel, hidePanel } from "./panel";
 import { IdeBridge } from "./ide";
 import { GitManager, gitGutter, type QuickPickItem } from "./git";
+import { BlameManager, gitBlame } from "./blame";
 import { fileIcon, folderKind } from "./icons";
 import "./icons.css";
 import {
@@ -115,6 +116,7 @@ function makeState(path: string, doc: string, readOnly = false): EditorState {
       oneDark,
       langFor(path).ext(),
       gitGutter,
+      gitBlame,
       lspServers.extensionFor(path),
       // Ctrl+clic = ir a definición / abrir ruta; los cursores múltiples van con Alt+clic.
       EditorView.clickAddsSelectionRange.of((e) => e.altKey),
@@ -135,7 +137,10 @@ function makeState(path: string, doc: string, readOnly = false): EditorState {
           if (active) scheduleAutoSave(active);
         }
         if (u.selectionSet || u.docChanged) ideBridge.selectionChanged();
-        if (u.docChanged) gitMgr.scheduleGutter();
+        if (u.docChanged) {
+          gitMgr.scheduleGutter();
+          blameMgr.schedule();
+        }
         if (u.docChanged || u.selectionSet) updatePos();
       }),
     ],
@@ -189,6 +194,7 @@ function activate(tab: Tab) {
   saveSession();
   ideBridge.selectionChanged();
   gitMgr.updateGutter();
+  blameMgr.schedule(150);
 }
 
 function labelTab(t: Tab) {
@@ -1371,6 +1377,16 @@ const gitMgr = new GitManager({
   },
   status,
 });
+
+const blameMgr = new BlameManager({
+  view,
+  activePath: () => active?.path ?? null,
+  gitLocation: (path) => gitMgr.gitLocation(path),
+  enabled: () => settings().gitBlame,
+});
+// Tras un commit o un cambio de rama, la autoría de las líneas cambia.
+gitMgr.onRefresh(() => blameMgr.schedule(200));
+onSettingsChange(() => blameMgr.schedule(0));
 
 // Volver al editor desde otra app (terminal externa, VS Code…) puede traer cambios de Git.
 window.addEventListener("focus", () => gitMgr.scheduleRefresh(100));

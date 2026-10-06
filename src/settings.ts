@@ -6,11 +6,14 @@ export interface Settings {
   autoSave: AutoSave;
   /** Milisegundos sin escribir antes de guardar (solo con autoSave = "afterDelay"). */
   autoSaveDelay: number;
+  /** Mostrar al final de la línea actual quién la cambió y en qué commit (git blame). */
+  gitBlame: boolean;
 }
 
 export const DEFAULTS: Settings = {
   autoSave: "off",
   autoSaveDelay: 1000,
+  gitBlame: true,
 };
 
 const AUTOSAVE_OPTIONS: { value: AutoSave; label: string; help: string }[] = [
@@ -32,7 +35,8 @@ function sanitize(raw: unknown): Settings {
   const autoSave = AUTOSAVE_OPTIONS.some((o) => o.value === r.autoSave) ? r.autoSave! : DEFAULTS.autoSave;
   const delay = Number(r.autoSaveDelay);
   const autoSaveDelay = Number.isFinite(delay) ? Math.min(MAX_DELAY, Math.max(MIN_DELAY, Math.round(delay))) : DEFAULTS.autoSaveDelay;
-  return { ...r, autoSave, autoSaveDelay } as Settings;
+  const gitBlame = typeof r.gitBlame === "boolean" ? r.gitBlame : DEFAULTS.gitBlame;
+  return { ...r, autoSave, autoSaveDelay, gitBlame } as Settings;
 }
 
 export async function loadSettings(): Promise<Settings> {
@@ -111,6 +115,17 @@ export function openSettings() {
   delayRow.hidden = current.autoSave !== "afterDelay";
   section.appendChild(delayRow);
   body.appendChild(section);
+
+  const gitSection = document.createElement("section");
+  gitSection.innerHTML = `<h3>Git</h3>`;
+  const blame = document.createElement("label");
+  blame.className = "radio";
+  blame.innerHTML = `<input type="checkbox" /><span><strong>Autor de la línea actual</strong><small>Muestra al final de la línea del cursor quién la cambió, hace cuánto y el mensaje del commit (como en VS Code).</small></span>`;
+  const blameInput = blame.querySelector("input")!;
+  blameInput.checked = current.gitBlame;
+  blameInput.addEventListener("change", () => updateSettings({ gitBlame: blameInput.checked }).catch(reportError));
+  gitSection.appendChild(blame);
+  body.appendChild(gitSection);
 
   overlay.hidden = false;
   (group.querySelector("input:checked") as HTMLInputElement | null)?.focus();
