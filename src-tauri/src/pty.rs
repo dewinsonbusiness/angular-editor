@@ -96,6 +96,14 @@ pub fn pty_spawn(
     let mut cmd = CommandBuilder::new(program.unwrap_or_else(default_shell));
     cmd.args(&args);
     cmd.cwd(&cwd);
+    // No heredar variables que quiten los colores o que hagan creer a `claude` que corre
+    // dentro de otra sesión de Claude Code (pasa si el editor se abrió desde una).
+    for (key, _) in std::env::vars_os() {
+        let k = key.to_string_lossy().to_uppercase();
+        if k == "NO_COLOR" || k == "FORCE_COLOR" || k == "CLAUDECODE" || k.starts_with("CLAUDE_CODE_") {
+            cmd.env_remove(&key);
+        }
+    }
     cmd.env("TERM", "xterm-256color");
     cmd.env("COLORTERM", "truecolor");
     cmd.env("TERM_PROGRAM", "editor-angular");
