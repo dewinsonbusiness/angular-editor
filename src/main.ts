@@ -1427,10 +1427,11 @@ window.addEventListener("unhandledrejection", (e) => {
 
 setupPanel();
 
-const terminalPanel = new TerminalPanel({
+const terminalPanel: TerminalPanel = new TerminalPanel({
   cwd: () => root,
-  env: () => ideBridge.terminalEnv(),
+  env: (): Record<string, string> => ideBridge.terminalEnv(),
   status,
+  expectClaudeConnection: (claim) => ideBridge.expectConnection(claim),
 });
 
 const LANGUAGE_IDS: Record<string, string> = {
@@ -1438,7 +1439,7 @@ const LANGUAGE_IDS: Record<string, string> = {
   scss: "scss", sass: "sass", css: "css", json: "json", md: "markdown",
 };
 
-const ideBridge = new IdeBridge({
+const ideBridge: IdeBridge = new IdeBridge({
   view,
   root: () => root,
   activePath: () => active?.path ?? null,
@@ -1468,15 +1469,15 @@ const ideBridge = new IdeBridge({
       code: i.code,
     })),
   })),
-  focusClaude: () => terminalPanel.openClaude(),
-  onConnection: (connected) => {
+  focusClaude: (): number | null => terminalPanel.openClaude(),
+  onConnection: (sessions) => {
     const el = $("status-claude");
-    el.textContent = connected ? "✳ Claude conectado" : "✳ Claude";
-    el.classList.toggle("on", connected);
-    el.title = connected
-      ? "Claude Code está conectado al editor (Ctrl+Alt+K envía la selección)"
+    el.textContent = sessions === 0 ? "✳ Claude" : sessions === 1 ? "✳ Claude conectado" : `✳ ${sessions} Claude conectados`;
+    el.classList.toggle("on", sessions > 0);
+    el.title = sessions
+      ? "Claude Code está conectado al editor (Ctrl+Alt+K envía la selección al Claude que estás usando)"
       : "Abrir Claude Code en la terminal";
-    status(connected ? "Claude Code se conectó al editor" : "Claude Code se desconectó");
+    status(sessions ? `Claude Code conectado (${sessions} sesión${sessions === 1 ? "" : "es"})` : "Claude Code se desconectó");
   },
   status,
 });

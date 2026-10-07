@@ -26,8 +26,10 @@ export interface IdeHost {
   openFile(path: string): Promise<boolean>;
   save(path: string): Promise<boolean>;
   diagnostics(): IdeDiagnostic[];
-  focusClaude(): void;
-  onConnection(connected: boolean): void;
+  /** Muestra el Claude que estás usando (o abre uno) y devuelve su conexión, si se conoce. */
+  focusClaude(): number | null;
+  /** Número de sesiones de Claude conectadas (0 = ninguna). */
+  onConnection(sessions: number): void;
   status(msg: string): void;
 }
 
@@ -35,7 +37,10 @@ interface Pos { line: number; character: number }
 interface Range { start: Pos; end: Pos }
 interface SelectionInfo { text: string; filePath: string; fileUrl: string; selection: Range & { isEmpty: boolean } }
 
-type IdeEvent = { kind: "connected" } | { kind: "disconnected" } | { kind: "message"; data: string };
+type IdeEvent =
+  | { kind: "connected"; conn: number }
+  | { kind: "disconnected"; conn: number }
+  | { kind: "message"; conn: number; data: string };
 type ToolResult = { content: { type: "text"; text: string }[]; isError?: boolean };
 
 const SUPPORTED_PROTOCOLS = ["2025-11-25", "2025-06-18", "2025-03-26", "2024-11-05", "2024-10-07"];
@@ -96,7 +101,8 @@ function posOf(state: EditorState, offset: number): Pos {
 }
 
 export class IdeBridge {
-  private connected = false;
+  /** Sesiones de `claude` conectadas ahora mismo (puede haber varias). */
+  private clients = new Set<number>();
   private port = 0;
   private lastSelection: SelectionInfo | null = null;
   private lastSentSelection = "";
@@ -105,9 +111,10 @@ export class IdeBridge {
   constructor(private host: IdeHost) {
     const channel = new Channel<IdeEvent>();
     channel.onmessage = (ev) => this.onEvent(ev);
-    invoke<{ port: number; connected: boolean }>("ide_attach", { onEvent: channel }).then((info) => {
+    invoke<{ port: number; clients: number[] }>("ide_attach", { onEvent: channel }).then((info) => {
       this.port = info.port;
-      if (info.connected) this.setConnected(true);
+      info.clients.forEach((c) => this.clients.add(c));
+      if (this.clients.size) this.host.onConnection(this.clients.size);
     }).catch((e) => console.error("[ide] no disponible:", e));
   }
 
@@ -116,6 +123,7 @@ export class IdeBridge {
     return this.port ? { CLAUDE_CODE_SSE_PORT: String(this.port), ENABLE_IDE_INTEGRATION: "true" } : {};
   }
 
+  private get connected() { return this.clients.size > 0; }
   get isConnected() { return this.connected; }
 
   setWorkspace(root: string) {
@@ -124,37 +132,40 @@ export class IdeBridge {
 
   // ---------- eventos y envío ----------
 
-  private setConnected(c: boolean) {
-    this.connected = c;
-    this.lastSentSelection = "";
-    this.host.onConnection(c);
-    if (c) setTimeout(() => this.sendSelection(), 500);
-  }
-
   private onEvent(ev: IdeEvent) {
-    if (ev.kind === "connected") this.setConnected(true);
-    else if (ev.kind === "disconnected") this.setConnected(false);
-    else this.onMessage(ev.data);
+    if (ev.kind === "connected") {
+      this.clients.add(ev.conn);
+      this.claim(ev.conn);
+      this.host.onConnection(this.clients.size);
+      // Como VS Code: al conectarse, la sesión nueva recibe la selección actual.
+      setTimeout(() => this.sendSelection(ev.conn), 500);
+    } else if (ev.kind === "disconnected") {
+      this.clients.delete(ev.conn);
+      this.host.onConnection(this.clients.size);
+    } else {
+      this.onMessage(ev.conn, ev.data);
+    }
   }
 
-  private send(msg: object) {
+  /** A una sesión concreta, o a todas si `conn` es null (notificaciones). */
+  private send(conn: number | null, msg: object) {
     if (!this.connected) return;
-    invoke("ide_send", { message: JSON.stringify({ jsonrpc: "2.0", ...msg }) }).catch(() => {});
+    invoke("ide_send", { conn, message: JSON.stringify({ jsonrpc: "2.0", ...msg }) }).catch(() => {});
   }
 
-  private notify(method: string, params: object) {
-    this.send({ method, params });
+  private notify(method: string, params: object, conn: number | null = null) {
+    this.send(conn, { method, params });
   }
 
-  private async onMessage(raw: string) {
+  private async onMessage(conn: number, raw: string) {
     let msg: { id?: number | string; method?: string; params?: any };
     try { msg = JSON.parse(raw); } catch { return; }
     if (!msg.method || msg.id === undefined) return; // respuestas o notificaciones del CLI: nada que hacer
     try {
       const result = await this.handle(msg.method, msg.params ?? {});
-      this.send({ id: msg.id, result });
+      this.send(conn, { id: msg.id, result });
     } catch (e: any) {
-      this.send({ id: msg.id, error: { code: e?.code ?? -32603, message: e?.message ?? String(e) } });
+      this.send(conn, { id: msg.id, error: { code: e?.code ?? -32603, message: e?.message ?? String(e) } });
     }
   }
 
@@ -349,33 +360,57 @@ export class IdeBridge {
     this.selectionTimer = window.setTimeout(() => this.sendSelection(), 300);
   }
 
-  private sendSelection() {
+  /** Selección actual a todas las sesiones (o solo a `conn`, p. ej. a una que acaba de conectarse). */
+  private sendSelection(conn: number | null = null) {
     const sel = this.currentSelection();
     if (!sel) return;
     this.lastSelection = sel;
     const key = JSON.stringify(sel);
-    if (!this.connected || key === this.lastSentSelection) return;
-    this.lastSentSelection = key;
-    this.notify("selection_changed", sel);
+    if (!this.connected) return;
+    if (conn === null) {
+      if (key === this.lastSentSelection) return;
+      this.lastSentSelection = key;
+    }
+    this.notify("selection_changed", sel, conn);
   }
 
-  /** Ctrl+Alt+K: menciona el archivo (y las líneas seleccionadas) en el chat de Claude. */
+  // ---------- qué conexión es de qué terminal ----------
+
+  private pendingClaims: ((conn: number) => void)[] = [];
+  private lastConnected: number | null = null;
+
+  /**
+   * Una terminal que acaba de lanzar `claude` se queda con la próxima conexión que llegue.
+   * Así Ctrl+Alt+K menciona en el Claude que estás usando y no en todos.
+   */
+  expectConnection(claim: (conn: number) => void) {
+    this.pendingClaims.push(claim);
+    // Si en un minuto no se conectó (p. ej. Claude pidió confirmar la carpeta), no bloquear a otras.
+    setTimeout(() => { this.pendingClaims = this.pendingClaims.filter((c) => c !== claim); }, 60_000);
+  }
+
+  private claim(conn: number) {
+    this.lastConnected = conn;
+    this.pendingClaims.shift()?.(conn);
+  }
+
+  /** Ctrl+Alt+K: menciona el archivo (y las líneas seleccionadas) en el Claude que estás usando. */
   atMention() {
     const sel = this.currentSelection();
     if (!sel) return this.host.status("Abre un archivo para mencionarlo a Claude");
+    const target = this.host.focusClaude();
     if (!this.connected) {
-      this.host.focusClaude();
-      return this.host.status("Claude Code no está conectado: se abrió en la terminal; vuelve a pulsar Ctrl+Alt+K cuando arranque");
+      return this.host.status("Claude Code no está conectado todavía: vuelve a pulsar Ctrl+Alt+K cuando arranque");
     }
+    const conn = target != null && this.clients.has(target) ? target : this.lastConnected;
     const params: { filePath: string; lineStart?: number; lineEnd?: number } = { filePath: sel.filePath };
     if (!sel.selection.isEmpty) {
       params.lineStart = sel.selection.start.line;
       params.lineEnd = sel.selection.end.line;
     }
-    this.notify("at_mentioned", params);
+    this.notify("at_mentioned", params, conn !== null && this.clients.has(conn) ? conn : null);
     const lines = params.lineStart != null ? `#L${params.lineStart + 1}-${params.lineEnd! + 1}` : "";
     this.host.status(`Enviado a Claude: ${sel.filePath.split(/[\\/]/).pop()}${lines}`);
-    this.host.focusClaude();
   }
 
   diagnosticsChanged(path: string) {

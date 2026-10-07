@@ -20,9 +20,10 @@ use tokio_tungstenite::tungstenite::Message;
 #[derive(Serialize, Clone)]
 #[serde(tag = "kind", rename_all = "lowercase")]
 pub enum IdeEvent {
-    Connected,
-    Message { data: String },
-    Disconnected,
+    /// `conn` identifica a cada sesión de `claude` conectada (puede haber varias a la vez).
+    Connected { conn: u64 },
+    Message { conn: u64, data: String },
+    Disconnected { conn: u64 },
 }
 
 #[derive(Default)]
@@ -31,8 +32,8 @@ pub struct Ide {
     token: Mutex<String>,
     lock_path: Mutex<Option<PathBuf>>,
     folders: Mutex<Vec<String>>,
-    /// Cliente conectado ahora mismo (id de conexión, canal de salida).
-    client: Mutex<Option<(u64, mpsc::UnboundedSender<String>)>>,
+    /// Sesiones de `claude` conectadas: id de conexión → canal de salida.
+    clients: Mutex<std::collections::HashMap<u64, mpsc::UnboundedSender<String>>>,
     frontend: Mutex<Option<Channel<IdeEvent>>>,
 }
 
@@ -134,12 +135,12 @@ async fn handle(app: AppHandle, stream: tokio::net::TcpStream, conn_id: u64) {
     let Ok(ws) = tokio_tungstenite::accept_hdr_async(stream, check).await else { return };
     let (mut sink, mut source) = ws.split();
 
-    // Un solo cliente a la vez: el nuevo reemplaza al anterior (como en VS Code).
+    // Varias sesiones a la vez (a diferencia de VS Code): cada una con su propio canal.
     let (tx, mut rx) = mpsc::unbounded_channel::<String>();
     {
         let ide = app.state::<Ide>();
-        *ide.client.lock().unwrap() = Some((conn_id, tx));
-        ide.emit(IdeEvent::Connected);
+        ide.clients.lock().unwrap().insert(conn_id, tx);
+        ide.emit(IdeEvent::Connected { conn: conn_id });
     }
 
     let writer = tauri::async_runtime::spawn(async move {
@@ -153,40 +154,44 @@ async fn handle(app: AppHandle, stream: tokio::net::TcpStream, conn_id: u64) {
 
     while let Some(Ok(msg)) = source.next().await {
         match msg {
-            Message::Text(t) => app.state::<Ide>().emit(IdeEvent::Message { data: t.to_string() }),
+            Message::Text(t) => app.state::<Ide>().emit(IdeEvent::Message { conn: conn_id, data: t.to_string() }),
             Message::Close(_) => break,
             _ => {}
         }
     }
 
     let ide = app.state::<Ide>();
-    let mut client = ide.client.lock().unwrap();
-    if client.as_ref().is_some_and(|(id, _)| *id == conn_id) {
-        *client = None;
-        drop(client);
-        ide.emit(IdeEvent::Disconnected);
-    }
+    ide.clients.lock().unwrap().remove(&conn_id);
+    ide.emit(IdeEvent::Disconnected { conn: conn_id });
     writer.abort();
 }
 
 #[derive(Serialize)]
 pub struct IdeInfo {
     port: u16,
-    connected: bool,
+    clients: Vec<u64>,
 }
 
 /// El frontend se registra para recibir los mensajes del CLI (también tras recargar la interfaz).
 #[tauri::command]
 pub fn ide_attach(ide: State<'_, Ide>, on_event: Channel<IdeEvent>) -> IdeInfo {
     *ide.frontend.lock().unwrap() = Some(on_event);
-    IdeInfo { port: *ide.port.lock().unwrap(), connected: ide.client.lock().unwrap().is_some() }
+    IdeInfo { port: *ide.port.lock().unwrap(), clients: ide.clients.lock().unwrap().keys().copied().collect() }
 }
 
 #[tauri::command]
-pub fn ide_send(ide: State<'_, Ide>, message: String) -> Result<(), String> {
-    match ide.client.lock().unwrap().as_ref() {
-        Some((_, tx)) => tx.send(message).map_err(|e| e.to_string()),
-        None => Err("Claude Code no está conectado".into()),
+/// Envía a una sesión concreta (`conn`) o, sin `conn`, a todas (notificaciones como la selección).
+#[allow(clippy::needless_pass_by_value)]
+pub fn ide_send(ide: State<'_, Ide>, conn: Option<u64>, message: String) -> Result<(), String> {
+    let clients = ide.clients.lock().unwrap();
+    match conn {
+        Some(c) => clients.get(&c).ok_or("esa sesión de Claude ya no está conectada")?.send(message).map_err(|e| e.to_string()),
+        None => {
+            for tx in clients.values() {
+                let _ = tx.send(message.clone());
+            }
+            Ok(())
+        }
     }
 }
 

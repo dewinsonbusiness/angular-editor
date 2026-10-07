@@ -10,6 +10,8 @@ export interface TerminalHost {
   /** Variables de entorno extra (p. ej. las que usa Claude Code para conectarse al editor). */
   env(): Record<string, string>;
   status(msg: string): void;
+  /** La próxima conexión de Claude Code que llegue será la de esta terminal. */
+  expectClaudeConnection(claim: (conn: number) => void): void;
 }
 
 type PtyEvent = { kind: "data"; data: string } | { kind: "exit"; code: number | null };
@@ -23,12 +25,19 @@ interface Session {
   chip: HTMLElement;
   exited: boolean;
   writes: Promise<unknown>;
+  /** Terminal que ejecuta Claude Code, y su conexión con el editor si ya se conectó. */
+  claude: boolean;
+  conn: number | null;
 }
 
 const $ = (id: string) => document.getElementById(id) as HTMLElement;
 
 /** Rutas con espacios entre comillas, para que la shell y Claude las lean enteras. */
 const quotePath = (p: string) => (/\s/.test(p) ? `"${p}"` : p);
+
+/** Paneles visibles a la vez, lado a lado. */
+const MAX_PANES = 3;
+const CLAUDE_ARGS = ["-NoLogo", "-NoExit", "-Command", "claude"];
 
 // xterm.js (~300 KB) solo se descarga la primera vez que se abre una terminal.
 let xtermModules: Promise<{
@@ -60,17 +69,22 @@ const THEME = {
 
 export class TerminalPanel {
   private sessions: Session[] = [];
+  /** Sesiones que se ven ahora mismo, de izquierda a derecha. */
+  private visible: Session[] = [];
   private active: Session | null = null;
+  private lastClaude: Session | null = null;
   private counter = 0;
+  private claudeCounter = 0;
   private creating = false;
 
   constructor(private host: TerminalHost) {
     // Terminales de una carga anterior de la interfaz.
     invoke("pty_kill_all");
     $("term-new").addEventListener("click", () => this.create());
-    $("term-claude").addEventListener("click", () => this.openClaude());
+    $("term-claude").addEventListener("click", () => this.newClaude());
+    $("term-split").addEventListener("click", () => this.split());
     onPanelView((v) => { if (v === "terminal") this.onShown(); });
-    new ResizeObserver(() => this.fitActive()).observe($("term-host"));
+    new ResizeObserver(() => this.fitVisible()).observe($("term-host"));
   }
 
   /** Ctrl+Ñ / Ctrl+`: mostrar u ocultar la terminal (creando una si no hay). */
@@ -91,22 +105,40 @@ export class TerminalPanel {
     // `creating` evita un bucle: create() muestra el panel y eso vuelve a llamar aquí.
     if (!this.sessions.length) { if (!this.creating) this.create(); }
     else {
-      this.fitActive();
+      this.fitVisible();
       this.active?.term.focus();
     }
   }
 
-  /** Abre Claude Code en una terminal nueva; al salir de él queda la shell abierta. */
-  openClaude() {
-    const existing = this.sessions.find((s) => s.title === "Claude" && !s.exited);
-    if (existing) {
-      showPanel("terminal");
-      return this.select(existing);
-    }
-    return this.create({ title: "Claude", args: ["-NoLogo", "-NoExit", "-Command", "claude"] });
+  /** Botón ✳ Claude del panel: siempre una sesión nueva (puede haber varias a la vez). */
+  newClaude(opts: { split?: boolean } = {}) {
+    return this.create({ claude: true, split: opts.split });
   }
 
-  async create(opts: { title?: string; args?: string[] } = {}) {
+  /**
+   * Barra de estado / Ctrl+Alt+K: ir al Claude que estabas usando (o abrir uno).
+   * Devuelve su conexión con el editor, si ya se conoce.
+   */
+  openClaude(): number | null {
+    const target = (this.active?.claude && !this.active.exited ? this.active : null)
+      ?? (this.lastClaude && !this.lastClaude.exited ? this.lastClaude : null)
+      ?? this.sessions.find((s) => s.claude && !s.exited) ?? null;
+    if (!target) {
+      this.newClaude();
+      return null;
+    }
+    showPanel("terminal");
+    this.select(target);
+    return target.conn;
+  }
+
+  /** ⫽ Dividir: otra terminal del mismo tipo que la activa, al lado. */
+  split() {
+    if (this.visible.length >= MAX_PANES) return this.host.status(`Como máximo ${MAX_PANES} paneles lado a lado`);
+    return this.create({ claude: this.active?.claude ?? false, split: true });
+  }
+
+  async create(opts: { claude?: boolean; split?: boolean } = {}) {
     const cwd = this.host.cwd();
     if (!cwd) return this.host.status("Abre un proyecto para usar la terminal");
     this.creating = true;
@@ -121,11 +153,14 @@ export class TerminalPanel {
     }
   }
 
-  private async createSession(cwd: string, opts: { title?: string; args?: string[] }) {
+  private async createSession(cwd: string, opts: { claude?: boolean; split?: boolean }) {
     const { Terminal, FitAddon, WebLinksAddon } = await loadXterm();
 
     const id = `term-${Date.now()}-${++this.counter}`;
-    const title = opts.title ?? `Terminal ${this.counter}`;
+    const claude = !!opts.claude;
+    const title = claude
+      ? (++this.claudeCounter === 1 ? "Claude" : `Claude ${this.claudeCounter}`)
+      : `Terminal ${this.counter}`;
     const el = document.createElement("div");
     el.className = "term-view";
     $("term-host").appendChild(el);
@@ -151,8 +186,14 @@ export class TerminalPanel {
     chip.querySelector(".chip-label")!.textContent = title;
     $("term-sessions").appendChild(chip);
 
-    const s: Session = { id, title, term, fit, el, chip, exited: false, writes: Promise.resolve() };
+    const s: Session = { id, title, term, fit, el, chip, exited: false, writes: Promise.resolve(), claude, conn: null };
     this.sessions.push(s);
+    if (claude) {
+      chip.classList.add("claude-chip");
+      this.host.expectClaudeConnection((conn) => { s.conn = conn; });
+    }
+    // Clic dentro de un panel lo convierte en el activo (para Ctrl+V, arrastrar archivos, Ctrl+Alt+K…).
+    el.addEventListener("mousedown", () => { if (this.active !== s) this.focusPane(s); });
     chip.addEventListener("click", (e) => {
       if ((e.target as HTMLElement).classList.contains("chip-close")) this.close(s);
       else this.select(s);
@@ -185,7 +226,12 @@ export class TerminalPanel {
       if (!s.exited) invoke("pty_resize", { id, cols, rows }).catch(() => {});
     });
 
-    this.select(s);
+    if (opts.split && this.visible.length && this.visible.length < MAX_PANES) {
+      this.visible.push(s);
+      this.focusPane(s);
+    } else {
+      this.select(s);
+    }
     fit.fit();
 
     const channel = new Channel<PtyEvent>();
@@ -200,7 +246,7 @@ export class TerminalPanel {
     try {
       await invoke("pty_spawn", {
         id, cwd, cols: term.cols, rows: term.rows,
-        program: null, args: opts.args ?? ["-NoLogo"], env: this.host.env(), onEvent: channel,
+        program: null, args: claude ? CLAUDE_ARGS : ["-NoLogo"], env: this.host.env(), onEvent: channel,
       });
     } catch (e) {
       s.exited = true;
@@ -244,16 +290,38 @@ export class TerminalPanel {
     return x >= r.left && x <= r.right && y >= r.top && y <= r.bottom;
   }
 
+  /** Mostrar `s`: si ya se ve, solo se enfoca; si no, ocupa el panel activo. */
   private select(s: Session) {
-    this.active = s;
-    for (const x of this.sessions) {
-      x.el.hidden = x !== s;
-      x.chip.classList.toggle("selected", x === s);
+    if (!this.visible.includes(s)) {
+      const slot = this.active ? this.visible.indexOf(this.active) : -1;
+      if (slot >= 0) this.visible[slot] = s;
+      else this.visible = [s];
     }
+    this.focusPane(s);
+  }
+
+  private focusPane(s: Session) {
+    this.active = s;
+    if (s.claude) this.lastClaude = s;
+    this.layout();
     requestAnimationFrame(() => {
-      this.fitActive();
+      this.fitVisible();
       s.term.focus();
     });
+  }
+
+  /** Paneles visibles en orden, el activo resaltado; los demás ocultos. */
+  private layout() {
+    for (const x of this.sessions) {
+      const pos = this.visible.indexOf(x);
+      x.el.hidden = pos < 0;
+      x.el.style.order = String(pos);
+      x.el.classList.toggle("focused", x === this.active && this.visible.length > 1);
+      x.chip.classList.toggle("selected", x === this.active);
+      x.chip.classList.toggle("shown", pos >= 0);
+    }
+    $("term-host").classList.toggle("split", this.visible.length > 1);
+    ($("term-split") as HTMLButtonElement).disabled = !this.active || this.visible.length >= MAX_PANES;
   }
 
   close(s: Session) {
@@ -263,16 +331,24 @@ export class TerminalPanel {
     s.chip.remove();
     const i = this.sessions.indexOf(s);
     this.sessions.splice(i, 1);
+    const pane = this.visible.indexOf(s);
+    if (pane >= 0) this.visible.splice(pane, 1);
+    if (this.lastClaude === s) this.lastClaude = null;
     if (this.active === s) {
       this.active = null;
-      const next = this.sessions[i] ?? this.sessions[i - 1];
+      const next = this.visible[Math.max(0, pane - 1)] ?? this.sessions[i] ?? this.sessions[i - 1];
       if (next) this.select(next);
+      else this.layout();
+    } else {
+      this.layout();
+      this.fitVisible();
     }
   }
 
-  private fitActive() {
-    const s = this.active;
-    if (!s || $("view-terminal").hidden || $("panel").hidden) return;
-    try { s.fit.fit(); } catch { /* contenedor sin tamaño todavía */ }
+  private fitVisible() {
+    if ($("view-terminal").hidden || $("panel").hidden) return;
+    for (const s of this.visible) {
+      try { s.fit.fit(); } catch { /* contenedor sin tamaño todavía */ }
+    }
   }
 }

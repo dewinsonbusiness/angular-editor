@@ -442,8 +442,15 @@ kbd {
 #term-sessions { display: flex; gap: 4px; flex: 1; min-width: 0; overflow-x: auto; }
 .term-chip::before { color: #98c379 !important; }
 .term-chip.exited::before { color: var(--fg-dim) !important; }
-#term-host { flex: 1; min-height: 0; position: relative; background: #21252b; }
-.term-view { position: absolute; inset: 4px 0 0 8px; }
+#term-host { flex: 1; min-height: 0; display: flex; background: #21252b; }
+/* Cada terminal visible es un panel; con varios, quedan lado a lado. */
+.term-view { flex: 1 1 0; min-width: 0; position: relative; padding: 4px 0 0 8px; }
+#term-host.split .term-view + .term-view:not([hidden]) { border-left: 1px solid var(--border); }
+#term-host.split .term-view { border-top: 2px solid transparent; }
+#term-host.split .term-view.focused { border-top-color: #528bff; }
+.term-chip.shown:not(.selected) { border-color: #528bff66; }
+.claude-chip .chip-label::before { content: "✳ "; color: #ff9db0; }
+#term-split:disabled { opacity: .4; }
 .term-view .xterm-viewport { scrollbar-width: thin; }
 #term-claude { background: #c3002f33; color: #ff9db0; }
 #term-claude:hover { background: var(--accent); color: #fff; }
