@@ -136,6 +136,7 @@ Con el **Angular Language Service** y **TypeScript** (los mismos motores que usa
 | `Ctrl+Tab` | Siguiente pestaña | | `Alt+clic` | Añadir cursor |
 | `Ctrl+J` | Mostrar/ocultar panel | | `Ctrl+Ñ` | Mostrar/ocultar terminal |
 | `Ctrl+Alt+K` | Enviar selección a Claude | | `Ctrl+,` | Configuración |
+| `Alt+/` | Completar con Claude | | `Tab` / `Esc` | Aceptar / descartar sugerencia |
 | `Ctrl+Shift+G` | Vista de Git | | `Ctrl+Shift+E` | Vista de archivos |
 
 En el árbol: **`F2`** renombra y **`Supr`** elimina el elemento seleccionado.
@@ -147,7 +148,29 @@ En el árbol: **`F2`** renombra y **`Supr`** elimina el elemento seleccionado.
 El editor habla con el CLI `claude` usando el **mismo mecanismo que la extensión oficial de
 VS Code**, así que Claude lo reconoce como un IDE más.
 
-**Cómo usarlo**
+### Conectar Claude Code (para cualquier persona)
+
+Cada persona usa **su propio Claude Code y su propia cuenta**; el editor no guarda credenciales.
+
+**Una sola vez:**
+
+1. Instala [Claude Code](https://claude.com/claude-code) (el comando `claude`).
+2. En una terminal ejecuta `claude` e inicia sesión con tu cuenta (`/login`).
+
+**Cada vez que trabajes:**
+
+| Forma | Pasos |
+|---|---|
+| **Desde el editor** *(recomendada)* | Abre el proyecto con `Ctrl+O` y pulsa **✳ Claude**. Se conecta solo: abajo verás **✳ Claude conectado**. |
+| **Desde otra terminal** | Entra en la carpeta del proyecto, ejecuta `claude`, escribe `/ide` y elige **Editor Angular** (el editor debe tener abierta esa misma carpeta). |
+
+> [!NOTE]
+> - La primera vez en cada carpeta Claude pregunta si confías en ella: acéptalo.
+> - El uso cuenta contra el plan de quien lo usa.
+> - Si también tienes VS Code con la extensión de Claude, `/ide` mostrará los dos: elige **Editor Angular**.
+> - Sin Claude Code instalado el editor funciona igual, solo sin estas funciones.
+
+### Uso
 
 1. Pulsa **✳ Claude** (barra de estado o pestaña *Terminal*): abre `claude` en la raíz del
    proyecto y se conecta solo. El indicador cambia a **✳ Claude conectado**.
@@ -157,6 +180,19 @@ VS Code**, así que Claude lo reconoce como un IDE más.
 4. Claude puede leer los **errores** del editor y **abrirte archivos**.
 5. Cuando propone un cambio, aparece **lado a lado** (actual | propuesto). Puedes retocar la
    propuesta y pulsar **Aceptar** (`Ctrl+Enter`) o **Rechazar**.
+6. **Varias sesiones a la vez**: cada **✳ Claude** del panel abre una nueva y **⫽ Dividir** las
+   pone lado a lado (hasta 3). `Ctrl+Alt+K` envía la selección al Claude que estás usando.
+7. **Pegar capturas**: `Win+Shift+S` y luego `Ctrl+V` en la terminal de Claude (la imagen se
+   adjunta). También puedes arrastrar archivos a la terminal.
+
+### Completar con Claude (`Alt+/`)
+
+Pon el cursor donde quieras código y pulsa **`Alt+/`** (en teclado español `Alt+Shift+7`, o
+`Alt` + `/` del teclado numérico). A los pocos segundos aparece la sugerencia en gris:
+**`Tab`** la acepta y **`Esc`** la descarta (o cancela mientras piensa).
+
+Usa tu `claude` instalado con tu suscripción (modelo Haiku, sin herramientas). Tarda unos
+**5–7 s** porque `claude` arranca en cada petición, por eso es a demanda y no mientras escribes.
 
 > [!IMPORTANT]
 > Este protocolo entre `claude` y los editores no está documentado públicamente. Si una
