@@ -136,7 +136,7 @@ Con el **Angular Language Service** y **TypeScript** (los mismos motores que usa
 | `Ctrl+Tab` | Siguiente pestaña | | `Alt+clic` | Añadir cursor |
 | `Ctrl+J` | Mostrar/ocultar panel | | `Ctrl+Ñ` | Mostrar/ocultar terminal |
 | `Ctrl+Alt+K` | Enviar selección a Claude | | `Ctrl+,` | Configuración |
-| `Alt+/` | Completar con Claude | | `Tab` / `Esc` | Aceptar / descartar sugerencia |
+| `Tab` tras código · `Alt+/` | Completar con Claude | | `Tab` / `Esc` | Aceptar / descartar sugerencia |
 | `Ctrl+Shift+G` | Vista de Git | | `Ctrl+Shift+E` | Vista de archivos |
 
 En el árbol: **`F2`** renombra y **`Supr`** elimina el elemento seleccionado.
@@ -187,9 +187,13 @@ Cada persona usa **su propio Claude Code y su propia cuenta**; el editor no guar
 
 ### Completar con Claude (`Alt+/`)
 
-Pon el cursor donde quieras código y pulsa **`Alt+/`** (en teclado español `Alt+Shift+7`, o
-`Alt` + `/` del teclado numérico). A los pocos segundos aparece la sugerencia en gris:
-**`Tab`** la acepta y **`Esc`** la descarta (o cancela mientras piensa).
+Mientras escribes, pulsa **`Tab`**: si hay código antes del cursor, Claude propone cómo seguir y
+a los pocos segundos aparece la sugerencia en gris. **`Tab`** otra vez la acepta y **`Esc`** la
+descarta (o cancela mientras piensa). En líneas vacías o con texto seleccionado, `Tab` indenta
+como siempre; ahí (o en cualquier sitio) puedes pedirla con **`Alt+/`** (en teclado español
+`Alt+Shift+7`, o `Alt` + `/` del teclado numérico).
+
+Con la lista de autocompletado abierta, `Tab` acepta el elemento elegido, como en VS Code.
 
 Usa tu `claude` instalado con tu suscripción (modelo Haiku, sin herramientas). Tarda unos
 **5–7 s** porque `claude` arranca en cada petición, por eso es a demanda y no mientras escribes.

@@ -1,6 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { StateField, StateEffect, Prec, type Extension } from "@codemirror/state";
 import { EditorView, Decoration, WidgetType, keymap, type DecorationSet } from "@codemirror/view";
+import { completionStatus, acceptCompletion, hasNextSnippetField } from "@codemirror/autocomplete";
 
 /**
  * Experimento: completar a demanda con Claude (Alt+/) usando el `claude` oficial y la
@@ -53,11 +54,35 @@ function dismiss(view: EditorView): boolean {
   return true;
 }
 
-/** Extensión para cada documento. Prec.highest: Tab acepta antes que la indentación. */
+/** Lo registra ClaudeCompleter: pide una sugerencia (o ignora la tecla si ya está pensando). */
+let requestFromTab: ((view: EditorView) => boolean) | null = null;
+
+/**
+ * Tab, por orden:
+ * 1. Hay sugerencia de Claude en gris → la acepta.
+ * 2. Lista de autocompletado abierta → acepta el elemento (como en VS Code).
+ * 3. Rellenando huecos de un fragmento → deja que salte al siguiente.
+ * 4. Hay código antes del cursor (sin selección) → pide sugerencia a Claude.
+ * 5. Si no → indentación normal.
+ */
+function tab(view: EditorView): boolean {
+  if (accept(view)) return true;
+  const state = view.state;
+  if (completionStatus(state) === "active") return acceptCompletion(view);
+  if (hasNextSnippetField(state)) return false;
+  const sel = state.selection;
+  if (sel.ranges.length > 1 || !sel.main.empty || state.readOnly) return false;
+  const line = state.doc.lineAt(sel.main.head);
+  const beforeCursor = state.sliceDoc(line.from, sel.main.head);
+  if (!/\S/.test(beforeCursor)) return false;
+  return requestFromTab?.(view) ?? false;
+}
+
+/** Extensión para cada documento. Prec.highest: Tab va antes que la indentación. */
 export const claudeCompletion: Extension = [
   suggestionField,
   Prec.highest(keymap.of([
-    { key: "Tab", run: accept },
+    { key: "Tab", run: tab },
     { key: "Escape", run: dismiss },
   ])),
 ];
@@ -84,6 +109,11 @@ export class ClaudeCompleter {
   private seq = 0;
 
   constructor(private host: CompletionHost) {
+    // Tab con código antes del cursor: pedir sugerencia (mientras piensa, Tab no hace nada).
+    requestFromTab = () => {
+      if (!this.pending) this.trigger();
+      return true;
+    };
     // Esc mientras piensa: cancelar la petición.
     window.addEventListener("keydown", (e) => {
       if (e.key === "Escape" && this.pending) this.cancel();
