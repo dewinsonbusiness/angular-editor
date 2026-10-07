@@ -155,6 +155,47 @@ pub fn pty_kill(ptys: State<'_, Ptys>, id: String) {
     }
 }
 
+/// Si el portapapeles tiene una imagen (captura, foto copiada…), la guarda como PNG temporal
+/// y devuelve su ruta; Claude Code adjunta la imagen al recibir esa ruta. `None` si no hay imagen.
+#[tauri::command]
+pub async fn clipboard_image_to_file() -> Result<Option<String>, String> {
+    tauri::async_runtime::spawn_blocking(|| {
+        let mut clipboard = arboard::Clipboard::new().map_err(|e| e.to_string())?;
+        let Ok(img) = clipboard.get_image() else { return Ok(None) };
+
+        let dir = std::env::temp_dir().join("editor-angular-imagenes");
+        std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+        // Borrar las capturas de más de un día para no acumular basura.
+        if let Ok(entries) = std::fs::read_dir(&dir) {
+            let day = std::time::Duration::from_secs(24 * 3600);
+            for e in entries.flatten() {
+                let old = e.metadata().and_then(|m| m.modified()).ok()
+                    .and_then(|t| t.elapsed().ok())
+                    .is_some_and(|age| age > day);
+                if old {
+                    let _ = std::fs::remove_file(e.path());
+                }
+            }
+        }
+
+        let stamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis())
+            .unwrap_or(0);
+        let path = dir.join(format!("captura-{stamp}.png"));
+        let file = std::fs::File::create(&path).map_err(|e| e.to_string())?;
+        let mut encoder = png::Encoder::new(std::io::BufWriter::new(file), img.width as u32, img.height as u32);
+        encoder.set_color(png::ColorType::Rgba);
+        encoder.set_depth(png::BitDepth::Eight);
+        let mut writer = encoder.write_header().map_err(|e| e.to_string())?;
+        writer.write_image_data(&img.bytes).map_err(|e| e.to_string())?;
+        writer.finish().map_err(|e| e.to_string())?;
+        Ok(Some(dunce::simplified(&path).to_string_lossy().into_owned()))
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
 /// Al recargar la interfaz se pierden las terminales: se cierran las huérfanas.
 #[tauri::command]
 pub fn pty_kill_all(ptys: State<'_, Ptys>) {

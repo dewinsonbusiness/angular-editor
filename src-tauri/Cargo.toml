@@ -27,6 +27,8 @@ tokio = { version = "1.53.2", features = ["net", "sync", "macros", "time"] }
 tokio-tungstenite = "0.30.0"
 futures-util = "0.3.34"
 uuid = { version = "1.27.0", features = ["v4"] }
+arboard = "3.6.1"
+png = "0.18.1"
 
 # https://tauri.app/concept/size/#cargo-configuration
 [profile.release]

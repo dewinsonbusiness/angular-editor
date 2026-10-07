@@ -171,6 +171,7 @@ pub fn run() {
             pty::pty_resize,
             pty::pty_kill,
             pty::pty_kill_all,
+            pty::clipboard_image_to_file,
             ide::ide_attach,
             ide::ide_send,
             ide::ide_set_workspace,

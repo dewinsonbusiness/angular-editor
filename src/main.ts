@@ -1,5 +1,6 @@
 import { invoke, Channel } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
+import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { open, ask, message } from "@tauri-apps/plugin-dialog";
 import { EditorState, Text, Transaction } from "@codemirror/state";
 import { EditorView, keymap } from "@codemirror/view";
@@ -1387,6 +1388,17 @@ const blameMgr = new BlameManager({
 // Tras un commit o un cambio de rama, la autoría de las líneas cambia.
 gitMgr.onRefresh(() => blameMgr.schedule(200));
 onSettingsChange(() => blameMgr.schedule(0));
+
+// Arrastrar archivos a la ventana: sobre la terminal se pegan sus rutas (Claude Code adjunta
+// así imágenes y archivos); en cualquier otro sitio se abren en el editor.
+getCurrentWebview().onDragDropEvent((event) => {
+  if (event.payload.type !== "drop" || !event.payload.paths.length) return;
+  const { paths, position } = event.payload;
+  const x = position.x / window.devicePixelRatio;
+  const y = position.y / window.devicePixelRatio;
+  if (terminalPanel.isOverTerminal(x, y) && terminalPanel.pastePaths(paths)) return;
+  for (const p of paths) openFile(p);
+});
 
 // Volver al editor desde otra app (terminal externa, VS Code…) puede traer cambios de Git.
 window.addEventListener("focus", () => gitMgr.scheduleRefresh(100));

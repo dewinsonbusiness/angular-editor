@@ -27,6 +27,9 @@ interface Session {
 
 const $ = (id: string) => document.getElementById(id) as HTMLElement;
 
+/** Rutas con espacios entre comillas, para que la shell y Claude las lean enteras. */
+const quotePath = (p: string) => (/\s/.test(p) ? `"${p}"` : p);
+
 // xterm.js (~300 KB) solo se descarga la primera vez que se abre una terminal.
 let xtermModules: Promise<{
   Terminal: typeof import("@xterm/xterm").Terminal;
@@ -167,7 +170,7 @@ export class TerminalPanel {
       }
       if (ctrl && (e.key === "v" || e.key === "V")) {
         e.preventDefault();
-        navigator.clipboard.readText().then((t) => term.paste(t)).catch(() => {});
+        this.paste(term);
         return false;
       }
       return true;
@@ -203,6 +206,42 @@ export class TerminalPanel {
       s.exited = true;
       term.write(`\x1b[31mNo se pudo abrir la terminal: ${e}\x1b[0m\r\n`);
     }
+  }
+
+  /**
+   * Ctrl+V: si el portapapeles tiene una imagen (p. ej. una captura con Win+Shift+S), se guarda
+   * como PNG temporal y se pega su ruta: Claude Code la adjunta como imagen. Si no, se pega el texto.
+   */
+  private async paste(term: Terminal) {
+    try {
+      const image = await invoke<string | null>("clipboard_image_to_file");
+      if (image) {
+        term.paste(quotePath(image) + " ");
+        this.host.status("Imagen pegada en la terminal");
+        return;
+      }
+    } catch (e) {
+      console.error("[terminal] no se pudo leer la imagen del portapapeles", e);
+    }
+    try {
+      term.paste(await navigator.clipboard.readText());
+    } catch { /* portapapeles vacío o no disponible */ }
+  }
+
+  /** Pegar rutas (archivos arrastrados) en la terminal activa. Devuelve false si no hay terminal. */
+  pastePaths(paths: string[]): boolean {
+    const s = this.active;
+    if (!s || s.exited || $("view-terminal").hidden || $("panel").hidden) return false;
+    s.term.paste(paths.map(quotePath).join(" ") + " ");
+    s.term.focus();
+    return true;
+  }
+
+  /** ¿Está el punto (en píxeles CSS de la ventana) sobre la terminal visible? */
+  isOverTerminal(x: number, y: number) {
+    if ($("panel").hidden || $("view-terminal").hidden) return false;
+    const r = $("term-host").getBoundingClientRect();
+    return x >= r.left && x <= r.right && y >= r.top && y <= r.bottom;
   }
 
   private select(s: Session) {
