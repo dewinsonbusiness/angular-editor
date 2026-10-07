@@ -1,3 +1,4 @@
+mod complete;
 mod fsops;
 mod git;
 mod ide;
@@ -138,6 +139,7 @@ pub fn run() {
         .manage(serve::Serves::default())
         .manage(pty::Ptys::default())
         .manage(ide::Ide::default())
+        .manage(complete::Completion::default())
         .setup(|app| {
             ide::start(app.handle().clone());
             Ok(())
@@ -175,6 +177,8 @@ pub fn run() {
             ide::ide_attach,
             ide::ide_send,
             ide::ide_set_workspace,
+            complete::claude_complete,
+            complete::claude_complete_cancel,
             git::git_status,
             git::git_show,
             git::git_blame,

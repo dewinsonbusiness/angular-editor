@@ -98,6 +98,15 @@
 
 #status-git { color: var(--fg); }
 
+/* Sugerencia de Claude (Alt+/): texto fantasma como el de Copilot. */
+.cm-ghost {
+  color: #7f848e;
+  opacity: .75;
+  font-style: italic;
+  white-space: pre;
+  pointer-events: none;
+}
+
 /* Autor de la línea actual (git blame en línea). */
 .cm-blame {
   margin-left: 3em;

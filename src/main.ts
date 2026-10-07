@@ -15,6 +15,7 @@ import { setupPanel, isPanelOpen, showPanel, hidePanel } from "./panel";
 import { IdeBridge } from "./ide";
 import { GitManager, gitGutter, type QuickPickItem } from "./git";
 import { BlameManager, gitBlame } from "./blame";
+import { ClaudeCompleter, claudeCompletion } from "./completion";
 import { fileIcon, folderKind } from "./icons";
 import "./icons.css";
 import {
@@ -118,6 +119,7 @@ function makeState(path: string, doc: string, readOnly = false): EditorState {
       langFor(path).ext(),
       gitGutter,
       gitBlame,
+      claudeCompletion,
       lspServers.extensionFor(path),
       // Ctrl+clic = ir a definición / abrir ruta; los cursores múltiples van con Alt+clic.
       EditorView.clickAddsSelectionRange.of((e) => e.altKey),
@@ -1312,6 +1314,8 @@ window.addEventListener("keydown", (e) => {
   let handled = true;
   if (terminalKey) terminalPanel.toggle();
   else if (ctrl && e.altKey && !e.shiftKey && k === "k") ideBridge.atMention();
+  // Alt+/ (en teclado español Alt+Shift+7) o Alt + "/" del teclado numérico: completar con Claude.
+  else if (e.altKey && !ctrl && (e.key === "/" || e.code === "NumpadDivide") && active) completer.trigger();
   else if (Date.now() < chordUntil) {
     chordUntil = 0;
     if (k === "s") saveAll();
@@ -1376,6 +1380,15 @@ const gitMgr = new GitManager({
     const t = findTab(path);
     if (t) await closeTab(t, true);
   },
+  status,
+});
+
+const completer = new ClaudeCompleter({
+  view,
+  root: () => root,
+  activePath: () => active?.path ?? null,
+  relPath: (p) => relOf(p),
+  language: (p) => langFor(p).name,
   status,
 });
 
