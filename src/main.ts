@@ -16,6 +16,7 @@ import { IdeBridge } from "./ide";
 import { GitManager, gitGutter, type QuickPickItem } from "./git";
 import { BlameManager, gitBlame } from "./blame";
 import { ClaudeCompleter, claudeCompletion } from "./completion";
+import { angularTemplateTools, setProjectSelectors } from "./templates";
 import { fileIcon, folderKind } from "./icons";
 import "./icons.css";
 import {
@@ -122,6 +123,7 @@ function makeState(path: string, doc: string, readOnly = false): EditorState {
       gitBlame,
       claudeCompletion,
       lspServers.extensionFor(path),
+      /\.html$/i.test(path) ? angularTemplateTools : [],
       // Ctrl+clic = ir a definición / abrir ruta; los cursores múltiples van con Alt+clic.
       EditorView.clickAddsSelectionRange.of((e) => e.altKey),
       EditorView.domEventHandlers({
@@ -868,6 +870,29 @@ async function ngGenerate(dir: string, s: Schematic) {
   }
 }
 
+// ---------- selectores de componentes (para Emmet en plantillas) ----------
+
+let selectorsTimer = 0;
+
+function scheduleSelectors() {
+  clearTimeout(selectorsTimer);
+  selectorsTimer = window.setTimeout(refreshSelectors, 1500);
+}
+
+async function refreshSelectors() {
+  if (!root) return;
+  try {
+    const hits = await invoke<Hit[]>("search", { root, query: "selector:", caseSensitive: true });
+    const found = new Set<string>();
+    for (const h of hits) {
+      if (!/\.ts$/.test(h.path)) continue;
+      const m = /selector:\s*['"`]([a-z][\w-]*)['"`]/.exec(h.text);
+      if (m) found.add(m[1]);
+    }
+    setProjectSelectors(found);
+  } catch { /* sin selectores: Emmet sigue con las etiquetas HTML */ }
+}
+
 // ---------- cambios hechos fuera del editor ----------
 
 interface FsChange { path: string; exists: boolean; is_dir: boolean }
@@ -885,6 +910,8 @@ async function onFsChanges(changes: FsChange[]) {
 
   // Cualquier cambio en disco puede cambiar el estado de Git (incluidos .git/HEAD e index).
   gitMgr.scheduleRefresh();
+  // Un componente nuevo o renombrado cambia los selectores que conoce Emmet.
+  if (changes.some((c) => /\.ts$/i.test(c.path))) scheduleSelectors();
   for (const c of changes) {
     if (!inRoot(c.path) || /[\\/]\.git[\\/]/.test(c.path)) continue;
     const parent = parentOf(c.path);
@@ -1072,6 +1099,7 @@ async function openFolder(path: string) {
   servePanel.loadTargets(root);
   ideBridge.setWorkspace(root);
   gitMgr.refresh();
+  refreshSelectors();
   await restoreSession(root);
   updateTitle();
   refreshIndex().then(() => status(`${fileIndex.length} archivos indexados`));

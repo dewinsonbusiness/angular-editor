@@ -2,6 +2,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { StateField, StateEffect, Prec, type Extension } from "@codemirror/state";
 import { EditorView, Decoration, WidgetType, keymap, type DecorationSet } from "@codemirror/view";
 import { completionStatus, acceptCompletion, hasNextSnippetField } from "@codemirror/autocomplete";
+import { isAngularTemplate, emmetAbbreviationAt, expandAbbreviation } from "./templates";
 
 /**
  * Experimento: completar a demanda con Claude (Alt+/) usando el `claude` oficial y la
@@ -60,14 +61,18 @@ let requestFromTab: ((view: EditorView) => boolean) | null = null;
 /**
  * Tab, por orden:
  * 1. Hay sugerencia de Claude en gris → la acepta.
- * 2. Lista de autocompletado abierta → acepta el elemento (como en VS Code).
- * 3. Rellenando huecos de un fragmento → deja que salte al siguiente.
- * 4. Hay código antes del cursor (sin selección) → pide sugerencia a Claude.
- * 5. Si no → indentación normal.
+ * 2. En una plantilla, abreviatura Emmet antes del cursor ("div", "ul>li*3") → la expande.
+ * 3. Lista de autocompletado abierta → acepta el elemento (como en VS Code).
+ * 4. Rellenando huecos de un fragmento → deja que salte al siguiente.
+ * 5. Hay código antes del cursor (sin selección) → pide sugerencia a Claude.
+ * 6. Si no → indentación normal.
  */
 function tab(view: EditorView): boolean {
   if (accept(view)) return true;
   const state = view.state;
+  if (state.facet(isAngularTemplate) && !hasNextSnippetField(state) && emmetAbbreviationAt(state)) {
+    if (expandAbbreviation(view)) return true;
+  }
   if (completionStatus(state) === "active") return acceptCompletion(view);
   if (hasNextSnippetField(state)) return false;
   const sel = state.selection;
