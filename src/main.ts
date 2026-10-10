@@ -1301,6 +1301,17 @@ async function cycleCompanion() {
 
 // ---------- atajos globales ----------
 
+/** F11: pantalla completa real (cubre la barra de tareas de Windows); F11 otra vez para salir. */
+async function toggleFullscreen() {
+  try {
+    const full = !(await appWindow.isFullscreen());
+    await appWindow.setFullscreen(full);
+    status(full ? "Pantalla completa · F11 para salir" : "");
+  } catch (e) {
+    status(`No se pudo cambiar a pantalla completa: ${e}`);
+  }
+}
+
 // Acordes estilo VS Code: Ctrl+K y luego otra tecla.
 let chordUntil = 0;
 
@@ -1311,7 +1322,7 @@ window.addEventListener("keydown", (e) => {
   // Ctrl+Ñ (teclado español) o Ctrl+` : mostrar/ocultar la terminal, como en VS Code.
   const terminalKey = ctrl && !e.shiftKey && (k === "ñ" || e.code === "Backquote");
   // Dentro de la terminal, las teclas son de la shell (Ctrl+C, Ctrl+W, Ctrl+K…) salvo estas.
-  if (terminalPanel.hasFocus() && !terminalKey && !(ctrl && !e.shiftKey && k === "j")) return;
+  if (terminalPanel.hasFocus() && !terminalKey && !(ctrl && !e.shiftKey && k === "j") && k !== "f11") return;
   let handled = true;
   if (terminalKey) terminalPanel.toggle();
   else if (ctrl && e.altKey && !e.shiftKey && k === "k") ideBridge.atMention();
@@ -1339,6 +1350,7 @@ window.addEventListener("keydown", (e) => {
   else if (k === "f12" && !e.shiftKey && !ctrl && active) goToDefinition();
   else if (ctrl && !e.shiftKey && k === "j") { if (isPanelOpen()) hidePanel(); else showPanel(); }
   else if (ctrl && !e.shiftKey && k === ",") openSettings();
+  else if (k === "f11" && !ctrl && !e.altKey) toggleFullscreen();
   else if (ctrl && e.shiftKey && k === "g") showSide("git");
   else if (ctrl && e.shiftKey && k === "e") showSide("files");
   else handled = false;
