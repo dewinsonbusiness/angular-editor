@@ -2,6 +2,7 @@ import { invoke, Channel } from "@tauri-apps/api/core";
 import { EditorView, keymap, showDialog } from "@codemirror/view";
 import { ChangeSet, Text, type EditorState, type Extension, type ChangeSpec } from "@codemirror/state";
 import { setDiagnostics, type Diagnostic } from "@codemirror/lint";
+import { pickedCompletion } from "@codemirror/autocomplete";
 import {
   LSPClient, LSPPlugin, Workspace, type WorkspaceFile, type Transport,
   serverCompletion, hoverTooltips, signatureHelp, serverDiagnostics,
@@ -18,6 +19,8 @@ export interface EditorHost {
   setTabState(path: string, state: EditorState): void;
   markProblems(path: string, errors: number, warnings: number): void;
   showLocations(title: string, items: Location[]): void;
+  /** Lista para elegir (acciones rápidas de Ctrl+.). */
+  pick(placeholder: string, items: { label: string; detail?: string; pick: () => void }[]): void;
   status(msg: string): void;
 }
 
@@ -42,6 +45,15 @@ export function uriToPath(uri: string): string {
 }
 
 export const samePath = (a: string, b: string) => a.toLowerCase() === b.toLowerCase();
+
+function kindLabel(kind?: string): string {
+  if (!kind) return "";
+  if (kind.startsWith("quickfix")) return "corrección";
+  if (kind.startsWith("refactor")) return "refactorización";
+  if (kind.startsWith("source.organizeImports")) return "organizar imports";
+  if (kind.startsWith("source")) return "archivo";
+  return kind;
+}
 const uriKey = (uri: string) => uriToPath(uri).toLowerCase();
 
 function offsetAt(doc: Text, pos: lsp.Position): number {
@@ -245,7 +257,35 @@ export class LspManager {
             hoverTooltips(),
             signatureHelp(),
             serverDiagnostics(),
+            // Acciones rápidas (Ctrl+.): sin esto los servidores no ofrecen correcciones con su edición.
+            {
+              clientCapabilities: {
+                textDocument: {
+                  codeAction: {
+                    codeActionLiteralSupport: {
+                      codeActionKind: {
+                        valueSet: ["", "quickfix", "refactor", "refactor.extract", "refactor.inline",
+                          "refactor.rewrite", "source", "source.organizeImports", "source.fixAll"],
+                      },
+                    },
+                    isPreferredSupport: true,
+                    disabledSupport: true,
+                    dataSupport: true,
+                    resolveSupport: { properties: ["edit"] },
+                  },
+                },
+                workspace: { applyEdit: true, workspaceEdit: { documentChanges: true } },
+              },
+            },
+            // Import automático al elegir algo de la lista de autocompletado.
+            EditorView.updateListener.of((u) => {
+              for (const tr of u.transactions) {
+                const picked = tr.annotation(pickedCompletion);
+                if (picked && tr.isUserEvent("input.complete")) this.expectImport(u.view, picked.label);
+              }
+            }),
             keymap.of([
+              { key: "Mod-.", run: (v) => { this.codeActions(v); return true; }, preventDefault: true },
               ...formatKeymap,
               { key: "F2", run: (v) => this.rename(v), preventDefault: true },
               { key: "Shift-F12", run: (v) => this.references(v), preventDefault: true },
@@ -324,6 +364,7 @@ export class LspManager {
     const path = uriToPath(params.uri);
     this.diagnostics.set(path.toLowerCase(), { path, doc: file.doc, items: params.diagnostics });
     this.diagnosticsListeners.forEach((l) => l(path));
+    this.maybeAutoImport(client, params);
     const count = (sev: number) => params.diagnostics.filter((d) => (d.severity ?? 1) === sev).length;
     this.host.markProblems(path, count(1), count(2));
     const active = this.host.activePath();
@@ -456,6 +497,126 @@ export class LspManager {
   /** true mientras el servidor de Angular está cargando un proyecto (la primera vez tarda). */
   get angularLoading() {
     return this.loadingAngular;
+  }
+
+  // ---------- acciones rápidas (Ctrl+.) ----------
+
+  /** Errores del archivo que tocan la línea del cursor o el rango dado (para pedir sus correcciones). */
+  private diagnosticsAt(uri: string, range: lsp.Range): lsp.Diagnostic[] {
+    const items = this.diagnostics.get(uriKey(uri))?.items ?? [];
+    return items.filter((d) => d.range.start.line <= range.end.line && d.range.end.line >= range.start.line);
+  }
+
+  private async requestActions(plugin: LSPPlugin, range: lsp.Range, diagnostics: lsp.Diagnostic[]) {
+    plugin.client.sync();
+    const res = await plugin.client.request<lsp.CodeActionParams, (lsp.Command | lsp.CodeAction)[] | null>(
+      "textDocument/codeAction",
+      { textDocument: { uri: plugin.uri }, range, context: { diagnostics, triggerKind: 1 } },
+    );
+    return (res ?? []).filter((a) => !("disabled" in a && a.disabled));
+  }
+
+  async codeActions(view: EditorView) {
+    const plugin = LSPPlugin.get(view);
+    if (!plugin) return this.host.status("Este tipo de archivo no tiene acciones rápidas");
+    const sel = view.state.selection.main;
+    let { from, to } = sel;
+    if (sel.empty) {
+      const word = view.state.wordAt(sel.head);
+      if (word) ({ from, to } = word);
+    }
+    const range: lsp.Range = { start: plugin.toPosition(from), end: plugin.toPosition(to) };
+    this.host.status("Buscando acciones rápidas…");
+    let actions: (lsp.Command | lsp.CodeAction)[];
+    try {
+      actions = await this.requestActions(plugin, range, this.diagnosticsAt(plugin.uri, range));
+    } catch (e: any) {
+      return this.host.status(`No se pudieron obtener acciones: ${e?.message ?? e}`);
+    }
+    if (!actions.length) return this.host.status("No hay acciones rápidas aquí");
+    this.host.status("");
+    // Primero las preferidas y las correcciones; luego refactorizaciones y acciones de archivo.
+    const rank = (a: lsp.Command | lsp.CodeAction) => {
+      const kind = "kind" in a ? a.kind ?? "" : "";
+      return ("isPreferred" in a && a.isPreferred ? 0 : 1) * 10 + (kind.startsWith("quickfix") ? 0 : kind.startsWith("refactor") ? 1 : 2);
+    };
+    actions.sort((a, b) => rank(a) - rank(b));
+    const client = plugin.client;
+    this.host.pick("Acciones rápidas (Ctrl+.)", actions.map((a) => ({
+      label: a.title,
+      detail: kindLabel("kind" in a ? a.kind : undefined),
+      pick: () => { this.runAction(client, a); },
+    })));
+  }
+
+  private async runAction(client: LSPClient, action: lsp.Command | lsp.CodeAction) {
+    try {
+      // Un Command "suelto" tiene `command` como texto; una CodeAction lo tiene como objeto.
+      if (typeof action.command === "string") {
+        const cmd = action as lsp.Command;
+        await client.request("workspace/executeCommand", { command: cmd.command, arguments: cmd.arguments });
+        return;
+      }
+      let a = action as lsp.CodeAction;
+      if (!a.edit && !a.command && a.data !== undefined) {
+        a = await client.request<lsp.CodeAction, lsp.CodeAction>("codeAction/resolve", a);
+      }
+      if (a.edit) await this.applyWorkspaceEdit(a.edit);
+      if (a.command) await client.request("workspace/executeCommand", { command: a.command.command, arguments: a.command.arguments });
+      this.host.status(`Aplicado: ${a.title}`);
+    } catch (e: any) {
+      this.host.status(`No se pudo aplicar «${action.title}»: ${e?.message ?? e}`);
+    }
+  }
+
+  // ---------- import automático al completar ----------
+
+  /** Nombre recién elegido de la lista de autocompletado, a la espera de ver si queda sin importar. */
+  private pendingImport: { uri: string; name: string; until: number } | null = null;
+
+  private expectImport(view: EditorView, label: string) {
+    const plugin = LSPPlugin.get(view);
+    const name = label.replace(/\(.*$/, "").trim();
+    if (!plugin || !/^[A-Za-z_$][\w$]*$/.test(name)) return;
+    this.pendingImport = { uri: plugin.uri, name, until: Date.now() + 5000 };
+  }
+
+  /**
+   * Si tras elegir un elemento de la lista aparece "No se encuentra el nombre X", se aplica la
+   * corrección de añadir el import (si hay una sola opción) o se ofrece elegir entre las que haya.
+   */
+  private async maybeAutoImport(client: LSPClient, params: lsp.PublishDiagnosticsParams) {
+    const p = this.pendingImport;
+    if (!p || Date.now() > p.until || uriKey(params.uri) !== uriKey(p.uri)) return;
+    // TS2304 "Cannot find name", TS2552 "Did you mean", TS2305/2724 en imports; o el mensaje con el nombre.
+    const text = (d: lsp.Diagnostic) => (typeof d.message === "string" ? d.message : d.message.value);
+    const diag = params.diagnostics.find((d) => text(d).includes(`'${p.name}'`) && [2304, 2552, 2662, 2663].includes(Number(d.code)));
+    if (!diag) return;
+    this.pendingImport = null;
+    const view = this.host.view;
+    const plugin = LSPPlugin.get(view);
+    if (!plugin || plugin.client !== client || uriKey(plugin.uri) !== uriKey(p.uri)) return;
+    let actions: (lsp.Command | lsp.CodeAction)[];
+    try {
+      actions = await this.requestActions(plugin, diag.range, [diag]);
+    } catch {
+      return;
+    }
+    const all = actions.filter((a) => /^(Add import from|Update import from|Import ['"]?\w)/i.test(a.title));
+    // Descartar orígenes internos o de pruebas (p. ej. '@angular/core/testing' para `inject`),
+    // salvo que sean los únicos.
+    const internal = /\/(testing|primitives|internal|private)\b|node_modules|ɵ/i;
+    const clean = all.filter((a) => !internal.test(a.title));
+    const imports = clean.length ? clean : all;
+    if (imports.length === 1) {
+      await this.runAction(client, imports[0]);
+      this.host.status(`Import añadido: ${imports[0].title}`);
+    } else if (imports.length > 1) {
+      this.host.pick(`¿De dónde importar «${p.name}»?`, imports.map((a) => ({
+        label: a.title,
+        pick: () => { this.runAction(client, a); },
+      })));
+    }
   }
 
   private rename(view: EditorView): boolean {

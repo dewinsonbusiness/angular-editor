@@ -98,6 +98,7 @@ const lspServers = new LspManager({
     if (cls) node?.classList.add(cls);
   },
   showLocations: (title, items) => showLocations(title, items),
+  pick: (placeholder, items) => quickPick(placeholder, items),
   status,
 });
 
