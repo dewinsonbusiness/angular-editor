@@ -96,8 +96,39 @@ export function emmetAbbreviationAt(state: EditorState): boolean {
  */
 let emmet: Promise<typeof import("@emmetio/codemirror6-plugin")> | null = null;
 export function expandAbbreviation(view: EditorView): boolean {
-  (emmet ??= import("@emmetio/codemirror6-plugin")).then((m) => m.expandAbbreviation(view));
+  (emmet ??= import("@emmetio/codemirror6-plugin"))
+    .then((m) => {
+      if (!m.expandAbbreviation(view)) emmetStatus("Emmet no reconoció la abreviatura");
+    })
+    .catch((e) => {
+      emmet = null; // reintentar la carga la próxima vez
+      emmetStatus(`Emmet no se pudo cargar: ${e?.message ?? e}`);
+    });
   return true;
+}
+
+let emmetStatus: (msg: string) => void = (msg) => console.warn(msg);
+/** Dónde mostrar los avisos de Emmet (barra de estado). */
+export function setEmmetStatus(fn: (msg: string) => void) {
+  emmetStatus = fn;
+}
+
+/** "div → Emmet" en la lista de sugerencias, como en VS Code (Tab o Enter lo expanden). */
+function emmetSuggestion(context: CompletionContext): CompletionResult | null {
+  if (!emmetAbbreviationAt(context.state)) return null;
+  const word = context.matchBefore(/[^\s>]+$/);
+  if (!word || word.text.includes("{{")) return null;
+  return {
+    from: word.from,
+    options: [{
+      label: word.text,
+      detail: "Emmet",
+      type: "keyword",
+      boost: 99,
+      apply: (view) => { expandAbbreviation(view); },
+    }],
+    filter: false,
+  };
 }
 
 /** Marca los documentos que son plantillas Angular (para que Tab pruebe Emmet). */
@@ -106,5 +137,5 @@ export const isAngularTemplate = Facet.define<boolean, boolean>({ combine: (v) =
 /** Extensiones para archivos .html de Angular. */
 export const angularTemplateTools: Extension = [
   isAngularTemplate.of(true),
-  EditorState.languageData.of(() => [{ autocomplete: controlFlow }]),
+  EditorState.languageData.of(() => [{ autocomplete: controlFlow }, { autocomplete: emmetSuggestion }]),
 ];

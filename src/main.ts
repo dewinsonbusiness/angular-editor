@@ -16,7 +16,7 @@ import { IdeBridge } from "./ide";
 import { GitManager, gitGutter, type QuickPickItem } from "./git";
 import { BlameManager, gitBlame } from "./blame";
 import { ClaudeCompleter, claudeCompletion } from "./completion";
-import { angularTemplateTools, setProjectSelectors } from "./templates";
+import { angularTemplateTools, setProjectSelectors, setEmmetStatus } from "./templates";
 import { fileIcon, folderKind } from "./icons";
 import "./icons.css";
 import {
@@ -1432,6 +1432,8 @@ const completer = new ClaudeCompleter({
   language: (p) => langFor(p).name,
   status,
 });
+
+setEmmetStatus(status);
 
 const blameMgr = new BlameManager({
   view,

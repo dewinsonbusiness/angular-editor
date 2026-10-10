@@ -70,7 +70,8 @@ let requestFromTab: ((view: EditorView) => boolean) | null = null;
 function tab(view: EditorView): boolean {
   if (accept(view)) return true;
   const state = view.state;
-  if (state.facet(isAngularTemplate) && !hasNextSnippetField(state) && emmetAbbreviationAt(state)) {
+  // Una abreviatura recién escrita tiene prioridad (también dentro de un bloque @for/@if).
+  if (state.facet(isAngularTemplate) && emmetAbbreviationAt(state)) {
     if (expandAbbreviation(view)) return true;
   }
   if (completionStatus(state) === "active") return acceptCompletion(view);
