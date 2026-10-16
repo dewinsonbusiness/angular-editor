@@ -146,7 +146,7 @@ class TabWorkspace extends Workspace {
 async function startTransport(
   id: string, kind: Kind, root: string,
   answer: (method: string, params: any) => Promise<unknown>,
-  onExit: (stderr: string) => void,
+  onExit: (stderr: string, code: number | null) => void,
 ): Promise<Transport> {
   const handlers = new Set<(msg: string) => void>();
   let queue: string[] = [];
@@ -172,7 +172,7 @@ async function startTransport(
   const channel = new Channel<string>();
   channel.onmessage = async (raw) => {
     const msg = JSON.parse(raw);
-    if (msg.method === "$/editor/exited") { onExit(msg.params?.stderr ?? ""); return; }
+    if (msg.method === "$/editor/exited") { onExit(msg.params?.stderr ?? "", msg.params?.code ?? null); return; }
     // Peticiones del servidor al cliente: el cliente de CodeMirror no las atiende.
     if (msg.method && msg.id !== undefined) {
       let result: unknown = null;
@@ -208,29 +208,100 @@ export class LspManager {
   }
   private generation = 0;
   private loadingAngular = false;
+  /** Proceso actual de cada servidor (cambia al reiniciarlo). */
+  private ids = new Map<Kind, string>();
+  private seq = 0;
+  /** Momentos de los últimos reinicios automáticos, para no entrar en bucle si muere siempre. */
+  private crashes = new Map<Kind, number[]>();
+  private changedListeners = new Set<(kind: Kind) => void>();
 
   constructor(private host: EditorHost) {}
+
+  /** Avisa cuando un servidor arranca o se reinicia: las pestañas deben enlazarse al nuevo. */
+  onServerChanged(listener: (kind: Kind) => void) {
+    this.changedListeners.add(listener);
+  }
+
+  /** Proyectos (apps/X, libs/X o la raíz) que Angular ya cargó o está cargando. */
+  private warmed = new Set<string>();
+
+  /**
+   * Al abrir un componente (.ts), el servidor de Angular carga su proyecto en segundo plano
+   * (abre el archivo, pide un hover y lo cierra: el proyecto se queda cargado). Así el primer
+   * Ctrl+clic en la plantilla no espera 15-25 s en un monorepo grande.
+   */
+  async warmAngular(root: string, path: string, text: string) {
+    if (!/\.ts$/i.test(path) || !/@Component\s*\(/.test(text)) return;
+    const rel = path.slice(root.length + 1).split(/[\\/]/);
+    const key = (/^(apps|libs|projects|packages)$/i.test(rel[0]) && rel.length > 2 ? rel.slice(0, 2).join("/") : "").toLowerCase();
+    if (this.warmed.has(key)) return;
+    const server = this.servers.get("angular");
+    if (!server) return;
+    this.warmed.add(key);
+    const uri = pathToUri(path);
+    try {
+      await server.client.initializing;
+      server.client.notification<lsp.DidOpenTextDocumentParams>("textDocument/didOpen", {
+        textDocument: { uri, languageId: "typescript", version: 0, text },
+      });
+      await server.client.request<lsp.HoverParams, unknown>("textDocument/hover", {
+        textDocument: { uri }, position: { line: 0, character: 0 },
+      });
+    } catch {
+      this.warmed.delete(key); // se reintentará con el próximo componente
+    } finally {
+      if (this.servers.get("angular") === server) {
+        server.client.notification<lsp.DidCloseTextDocumentParams>("textDocument/didClose", { textDocument: { uri } });
+      }
+    }
+  }
+
+  /** ¿Este archivo lo atiende el servidor `kind`? */
+  handles(path: string, kind: Kind) {
+    return this.kindFor(path) === kind;
+  }
 
   async start(root: string) {
     this.stop();
     const gen = this.generation;
-    for (const kind of ["typescript", "angular"] as Kind[]) {
-      const id = `${kind}-${gen}`;
+    await Promise.all((["typescript", "angular"] as Kind[]).map((kind) => this.startKind(kind, root, gen)));
+  }
+
+  private async startKind(kind: Kind, root: string, gen: number) {
+    {
+      const id = `${kind}-${gen}-${++this.seq}`;
+      this.ids.set(kind, id);
+      const name = kind === "angular" ? "Angular" : "TypeScript";
       try {
         const transport = await startTransport(
           id, kind, root,
           (method, params) => this.answer(method, params),
-          (stderr) => {
-            if (gen !== this.generation) return;
+          (stderr, code) => {
+            if (gen !== this.generation || this.ids.get(kind) !== id) return;
             // La línea más útil suele ser la del error ("Error: ...").
             const lines = stderr.split("\n").map((l) => l.trim()).filter(Boolean);
-            const reason = lines.find((l) => /\b\w*Error\b/.test(l)) ?? lines[lines.length - 1] ?? "sin detalles";
-            const name = kind === "angular" ? "Angular" : "TypeScript";
-            this.host.status(`El servidor de ${name} se cerró: ${reason}`);
-            if (stderr) console.error(`[lsp ${kind}] se cerró:\n${stderr}`);
+            const reason = lines.find((l) => /heap limit|out of memory/i.test(l))
+              ?? lines.find((l) => /\b\w*Error\b/.test(l)) ?? lines[lines.length - 1] ?? `código ${code ?? "?"}`;
+            if (stderr) console.error(`[lsp ${kind}] se cerró (código ${code}):\n${stderr}`);
+            this.servers.get(kind)?.client.disconnect();
+            this.servers.delete(kind);
+            if (kind === "angular") { this.loadingAngular = false; this.warmed.clear(); }
+            // Reinicio automático (hasta 3 veces en 5 minutos).
+            const now = Date.now();
+            const recent = (this.crashes.get(kind) ?? []).filter((t) => now - t < 5 * 60_000);
+            recent.push(now);
+            this.crashes.set(kind, recent);
+            if (recent.length > 3) {
+              this.host.status(`El servidor de ${name} se cerró varias veces (${reason}). Reabre el proyecto para reintentar.`);
+              return;
+            }
+            this.host.status(`El servidor de ${name} se cerró (${reason}); reiniciándolo…`);
+            setTimeout(() => {
+              if (gen === this.generation && this.ids.get(kind) === id) this.startKind(kind, root, gen);
+            }, 1000);
           },
         );
-        if (gen !== this.generation) return void invoke("lsp_stop", { id });
+        if (gen !== this.generation || this.ids.get(kind) !== id) return void invoke("lsp_stop", { id });
         let ws!: TabWorkspace;
         const client = new LSPClient({
           rootUri: pathToUri(root),
@@ -293,6 +364,7 @@ export class LspManager {
           ],
         }).connect(transport);
         this.servers.set(kind, { kind, client, ws });
+        for (const l of this.changedListeners) l(kind);
         client.initializing.then(
           () => kind === "typescript" && this.host.status("TypeScript: listo"),
           (e) => this.host.status(`Error iniciando ${kind}: ${e?.message ?? e}`),
@@ -305,12 +377,13 @@ export class LspManager {
 
   stop() {
     this.generation++;
-    for (const [kind, s] of this.servers) {
-      s.client.disconnect();
-      invoke("lsp_stop", { id: `${kind}-${this.generation - 1}` });
-    }
+    for (const s of this.servers.values()) s.client.disconnect();
+    for (const id of this.ids.values()) invoke("lsp_stop", { id });
+    this.ids.clear();
     this.servers.clear();
     this.diagnostics.clear();
+    this.loadingAngular = false;
+    this.warmed.clear();
   }
 
   private kindFor(path: string): Kind | null {
@@ -467,7 +540,8 @@ export class LspManager {
     const ms = () => Math.round(performance.now() - started);
     const plugin = LSPPlugin.get(view);
     if (!plugin) return { result: "no-server", ms: 0 };
-    const server = [...this.servers.values()].find((s) => s.client === plugin.client)?.kind ?? "";
+    const server = [...this.servers.values()].find((s) => s.client === plugin.client)?.kind;
+    if (!server) return { result: "error", ms: 0, detail: "el servidor se está reiniciando, prueba en unos segundos" };
     plugin.client.sync();
     let response: lsp.Location | lsp.Location[] | lsp.LocationLink[] | null;
     try {

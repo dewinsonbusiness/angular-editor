@@ -108,7 +108,10 @@ pub fn lsp_start(
     }
 
     let mut cmd = Command::new("node");
-    cmd.args(server_args(&app, &kind, &root)?)
+    // Más memoria que la de Node por defecto: en monorepos grandes (varias apps cargadas)
+    // el servidor de Angular puede pasar de 4 GB y morir por falta de memoria.
+    cmd.arg("--max-old-space-size=8192")
+        .args(server_args(&app, &kind, &root)?)
         .current_dir(&root)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -127,12 +130,20 @@ pub fn lsp_start(
     let stdout = child.stdout.take().unwrap();
     let stderr = child.stderr.take().unwrap();
 
-    // Las últimas líneas de stderr se guardan para explicar por qué murió el servidor.
+    // Las últimas líneas de stderr se guardan para explicar por qué murió el servidor,
+    // y todo stderr va a un log (%LOCALAPPDATA%\com.sildra.editorangular\logs\lsp-<tipo>.log).
     let tag = id.clone();
+    let mut log = app.path().app_log_dir().ok().and_then(|dir| {
+        std::fs::create_dir_all(&dir).ok()?;
+        std::fs::File::create(dir.join(format!("lsp-{kind}.log"))).ok()
+    });
     let stderr_thread = std::thread::spawn(move || {
         let mut tail: Vec<String> = Vec::new();
         for l in BufReader::new(stderr).lines().map_while(Result::ok) {
             eprintln!("[lsp {tag}] {l}");
+            if let Some(f) = log.as_mut() {
+                let _ = writeln!(f, "{l}");
+            }
             tail.push(l);
             if tail.len() > 30 {
                 tail.remove(0);
@@ -141,14 +152,29 @@ pub fn lsp_start(
         tail
     });
     let exit_channel = on_message.clone();
+    let exit_app = app.clone();
+    let exit_id = id.clone();
     std::thread::spawn(move || {
         pump(stdout, on_message);
         let tail = stderr_thread.join().unwrap_or_default();
+        // Código de salida, si el proceso sigue en la tabla (si no, lo paró el editor).
+        let mut code = None;
+        let servers = exit_app.state::<Servers>();
+        for _ in 0..20 {
+            let mut map = servers.0.lock().unwrap();
+            let Some(s) = map.get_mut(&exit_id) else { break };
+            if let Ok(Some(st)) = s.child.try_wait() {
+                code = st.code();
+                break;
+            }
+            drop(map);
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
         // Aviso sintético para que el frontend sepa que el servidor murió y por qué.
         let msg = serde_json::json!({
             "jsonrpc": "2.0",
             "method": "$/editor/exited",
-            "params": { "stderr": tail.join("\n") },
+            "params": { "stderr": tail.join("\n"), "code": code },
         });
         let _ = exit_channel.send(msg.to_string());
     });

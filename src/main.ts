@@ -2,7 +2,7 @@ import { invoke, Channel } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { open, ask, message } from "@tauri-apps/plugin-dialog";
-import { EditorState, Text, Transaction } from "@codemirror/state";
+import { Compartment, EditorState, Text, Transaction } from "@codemirror/state";
 import { EditorView, keymap } from "@codemirror/view";
 import { indentWithTab } from "@codemirror/commands";
 import { basicSetup } from "codemirror";
@@ -106,6 +106,9 @@ const lspServers = new LspManager({
 /** Código de dependencias (node_modules) o de fuera del proyecto: se mira, no se edita. */
 const isLibraryPath = (path: string) => /[\\/]node_modules[\\/]/i.test(path) || (!!root && !inRoot(path));
 
+/** El servidor de lenguaje de cada pestaña; se cambia si el servidor se reinicia. */
+const lspSlot = new Compartment();
+
 function makeState(path: string, doc: string, readOnly = false): EditorState {
   // Se conserva el final de línea original (CRLF en muchos proyectos de Windows).
   const eol = doc.includes("\r\n") ? "\r\n" : "\n";
@@ -122,7 +125,7 @@ function makeState(path: string, doc: string, readOnly = false): EditorState {
       gitGutter,
       gitBlame,
       claudeCompletion,
-      lspServers.extensionFor(path),
+      lspSlot.of(lspServers.extensionFor(path)),
       /\.html$/i.test(path) ? angularTemplateTools : [],
       // Ctrl+clic = ir a definición / abrir ruta; los cursores múltiples van con Alt+clic.
       EditorView.clickAddsSelectionRange.of((e) => e.altKey),
@@ -223,6 +226,7 @@ async function openFile(path: string, line?: number, col = 0) {
       return;
     }
     const library = isLibraryPath(path);
+    if (!library && root) lspServers.warmAngular(root, path, text);
     const preview = library ? tabs.find((t) => t.preview) : undefined;
     if (preview) {
       // Reutilizar la pestaña de vista previa en lugar de acumular pestañas de node_modules.
@@ -879,18 +883,79 @@ function scheduleSelectors() {
   selectorsTimer = window.setTimeout(refreshSelectors, 1500);
 }
 
-async function refreshSelectors() {
+/**
+ * Dónde se declara cada selector: etiquetas (<lib-list-bank>) y atributos ([appFoco]).
+ * Sirve para Emmet y para que Ctrl+clic en un componente sea instantáneo, sin esperar al
+ * servidor de Angular (que en un monorepo grande tarda en cargar el proyecto).
+ */
+const selectorIndex = new Map<string, Hit>();
+let selectorsLoaded: Promise<void> | null = null;
+
+function refreshSelectors() {
+  return (selectorsLoaded = loadSelectors());
+}
+
+async function loadSelectors() {
   if (!root) return;
   try {
     const hits = await invoke<Hit[]>("search", { root, query: "selector:", caseSensitive: true });
-    const found = new Set<string>();
+    selectorIndex.clear();
+    const tags = new Set<string>();
     for (const h of hits) {
-      if (!/\.ts$/.test(h.path)) continue;
-      const m = /selector:\s*['"`]([a-z][\w-]*)['"`]/.exec(h.text);
-      if (m) found.add(m[1]);
+      if (!/\.ts$/.test(h.path) || /\.spec\.ts$/.test(h.path)) continue;
+      const m = /selector:\s*['"`]([^'"`]+)['"`]/.exec(h.text);
+      if (!m) continue;
+      for (const part of m[1].split(",")) {
+        const sel = part.trim();
+        const tag = /^[a-z][\w-]*$/.exec(sel)?.[0];
+        if (tag) { tags.add(tag); selectorIndex.set(tag, h); continue; }
+        const attr = /^\[([\w-]+)\]$/.exec(sel)?.[1];
+        if (attr) selectorIndex.set(`[${attr.toLowerCase()}]`, h);
+      }
     }
-    setProjectSelectors(found);
+    setProjectSelectors(tags);
   } catch { /* sin selectores: Emmet sigue con las etiquetas HTML */ }
+}
+
+/** En una plantilla: nombre de etiqueta o de atributo bajo `pos`, con la clave del índice. */
+function selectorKeyAt(pos: number): string | null {
+  const line = view.state.doc.lineAt(pos);
+  const col = pos - line.from;
+  for (const m of line.text.matchAll(/<\/?([a-zA-Z][\w-]*)/g)) {
+    const from = m.index! + m[0].length - m[1].length;
+    if (col >= from && col <= from + m[1].length) return m[1].toLowerCase();
+  }
+  // Atributo: appFoco, [appFoco]="x" o (appFoco)... dentro de una etiqueta.
+  const before = line.text.slice(0, col);
+  if (before.lastIndexOf("<") <= before.lastIndexOf(">")) return null;
+  const start = /[\w-]*$/.exec(before)!.index;
+  const end = col + (/^[\w-]*/.exec(line.text.slice(col))![0].length);
+  const name = line.text.slice(start, end);
+  return name ? `[${name.toLowerCase()}]` : null;
+}
+
+/** Ctrl+clic en <lib-x> o en un atributo de directiva: abrir su clase sin esperar al servidor. */
+async function goToSelector(pos: number): Promise<boolean> {
+  if (!active || !/\.html$/i.test(active.path)) return false;
+  const key = selectorKeyAt(pos);
+  if (!key) return false;
+  await (selectorsLoaded ?? refreshSelectors());
+  const hit = selectorIndex.get(key);
+  if (!hit) return false;
+  await openFile(absOf(hit.path), hit.line, hit.col);
+  // Mejor en el nombre de la clase que en el selector, como en VS Code.
+  const doc = view.state.doc;
+  for (let n = hit.line; n <= Math.min(doc.lines, hit.line + 40); n++) {
+    const l = doc.line(n);
+    const m = /class\s+(\w+)/.exec(l.text);
+    if (m) {
+      const at = l.from + m.index + m[0].length - m[1].length;
+      view.dispatch({ selection: { anchor: at }, effects: EditorView.scrollIntoView(at, { y: "center" }) });
+      break;
+    }
+  }
+  status("");
+  return true;
 }
 
 // ---------- cambios hechos fuera del editor ----------
@@ -1021,6 +1086,7 @@ async function goToDefinition(pos = view.state.selection.main.head) {
     const target = await resolveRelative(spec);
     if (target) return openFile(target);
   }
+  if (await goToSelector(pos)) return;
   if (definitionPending) return status("Ya estoy buscando una definición, espera un momento…");
   const word = view.state.wordAt(pos);
   const what = word ? `«${view.state.sliceDoc(word.from, word.to)}»` : "";
@@ -1538,6 +1604,19 @@ const ideBridge: IdeBridge = new IdeBridge({
   status,
 });
 lspServers.onDiagnosticsChanged((path) => ideBridge.diagnosticsChanged(path));
+// Un servidor arrancó o se reinició (p. ej. tras cerrarse): enlazar sus pestañas al nuevo.
+lspServers.onServerChanged((kind) => {
+  for (const t of tabs) {
+    if (!lspServers.handles(t.path, kind)) continue;
+    const effects = lspSlot.reconfigure(lspServers.extensionFor(t.path));
+    if (t === active) view.dispatch({ effects });
+    else t.state = t.state.update({ effects }).state;
+  }
+  // Pestañas restauradas antes de que Angular arrancara: cargar ya sus proyectos.
+  if (kind === "angular" && root) {
+    for (const t of tabs) if (!t.library) lspServers.warmAngular(root, t.path, stateOf(t).doc.toString());
+  }
+});
 $("status-claude").addEventListener("click", () => terminalPanel.openClaude());
 
 const servePanel = new ServePanel({
